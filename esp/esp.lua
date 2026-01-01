@@ -1,9 +1,6 @@
 -- ============================================================================
--- FORGEHUB - ESP MODULE (IMPROVED)
+-- FORGEHUB - ESP MODULE (FIXED & IMPROVED)
 -- ============================================================================
-
--- IMPORTANT: This is an improved drop-in replacement for esp.lua.
--- Save as esp.lua (or replace the module at esp/esp.lua) and reload the loader (main.lua).
 
 local Core = _G.ForgeHubCore
 if not Core then
@@ -20,325 +17,430 @@ local Profiler = Core.Profiler
 local PerformanceManager = Core.PerformanceManager
 
 -- ============================================================================
--- BOX CACHE (robust caching + safer world->screen checks)
+-- SETTINGS DEFAULTS (Garante que todas as configurações existam)
 -- ============================================================================
-local BoxCache = {}
-
-local function _isOnScreen(position)
-    if not position then return false end
-    local ok, screen = pcall(function()
-        return Camera:WorldToViewportPoint(position)
-    end)
-    if not ok or not screen then return false end
-    -- screen is Vector3 from Camera:WorldToViewportPoint -> Z>0 means in front
-    return screen.Z > 0, screen
+local function EnsureSettings()
+    Settings.ESP = Settings.ESP or {}
+    
+    -- Toggles
+    if Settings.ESP.Enabled == nil then Settings.ESP.Enabled = true end
+    if Settings.ESP.ShowBox == nil then Settings.ESP.ShowBox = true end
+    if Settings.ESP.ShowName == nil then Settings.ESP.ShowName = true end
+    if Settings.ESP.ShowDistance == nil then Settings.ESP.ShowDistance = true end
+    if Settings.ESP.ShowHealthBar == nil then Settings.ESP.ShowHealthBar = true end
+    if Settings.ESP.ShowSkeleton == nil then Settings.ESP.ShowSkeleton = true end
+    if Settings.ESP.ShowHighlight == nil then Settings.ESP.ShowHighlight = true end
+    if Settings.ESP.ShowLocalSkeleton == nil then Settings.ESP.ShowLocalSkeleton = false end
+    if Settings.ESP.IgnoreTeam == nil then Settings.ESP.IgnoreTeam = true end
+    
+    -- Distances
+    if Settings.ESP.MaxDistance == nil then Settings.ESP.MaxDistance = 1000 end
+    if Settings.ESP.SkeletonMaxDistance == nil then Settings.ESP.SkeletonMaxDistance = 300 end
+    if Settings.ESP.HighlightMaxDistance == nil then Settings.ESP.HighlightMaxDistance = 500 end
+    
+    -- Colors
+    if Settings.ESP.BoxColor == nil then Settings.ESP.BoxColor = Color3.fromRGB(255, 0, 0) end
+    if Settings.ESP.NameColor == nil then Settings.ESP.NameColor = Color3.fromRGB(255, 255, 255) end
+    if Settings.ESP.DistanceColor == nil then Settings.ESP.DistanceColor = Color3.fromRGB(200, 200, 200) end
+    if Settings.ESP.SkeletonColor == nil then Settings.ESP.SkeletonColor = Color3.fromRGB(255, 255, 255) end
+    if Settings.ESP.LocalSkeletonColor == nil then Settings.ESP.LocalSkeletonColor = Color3.fromRGB(0, 255, 255) end
+    if Settings.ESP.HighlightFillColor == nil then Settings.ESP.HighlightFillColor = Color3.fromRGB(255, 0, 0) end
+    if Settings.ESP.HighlightOutlineColor == nil then Settings.ESP.HighlightOutlineColor = Color3.fromRGB(255, 255, 255) end
+    if Settings.ESP.HighlightFillTransparency == nil then Settings.ESP.HighlightFillTransparency = 0.75 end
+    if Settings.ESP.HighlightOutlineTransparency == nil then Settings.ESP.HighlightOutlineTransparency = 0 end
 end
 
-local function GetBoxFromAnchor(anchor, model, distance)
+EnsureSettings()
+
+-- ============================================================================
+-- BOX CACHE (Improved)
+-- ============================================================================
+local BoxCache = {}
+local BOX_CACHE_CLEANUP_INTERVAL = 5
+local BOX_CACHE_MAX_AGE = 10
+
+local function CalculateBoundingBox(anchor, model, distance)
     if not anchor or not anchor:IsDescendantOf(workspace) then
         return false, 0, 0, 0, 0
     end
-
-    local now = tick()
-    local cacheKey = model or anchor
-    local cached = BoxCache[cacheKey]
-
-    local cacheTime = 0.1
-    if distance > 800 then
-        cacheTime = 0.5
-    elseif distance > 400 then
-        cacheTime = 0.25
-    end
-
-    if cached and (now - cached.time < cacheTime) then
-        -- validate cached visibility quickly
-        local onScreen, screen = _isOnScreen(anchor.Position)
-        if not onScreen then
-            BoxCache[cacheKey] = nil
-            return false, 0, 0, 0, 0
-        end
-        return cached.visible, cached.x, cached.y, cached.w, cached.h
-    end
-
-    -- Helper to build box from a list of world positions
-    local function computeFromPoints(points)
-        local minX, minY = math.huge, math.huge
-        local maxX, maxY = -math.huge, -math.huge
-        local visible = false
-        for _, p in ipairs(points) do
-            local ok, screen = pcall(function() return Camera:WorldToViewportPoint(p) end)
-            if ok and screen and screen.Z > 0 then
-                visible = true
-                minX = math.min(minX, screen.X)
-                minY = math.min(minY, screen.Y)
-                maxX = math.max(maxX, screen.X)
-                maxY = math.max(maxY, screen.Y)
-            end
-        end
-        if not visible then return false end
-        local result = {
-            visible = true,
-            x = minX,
-            y = minY,
-            w = math.max(1, maxX - minX),
-            h = math.max(1, maxY - minY),
-            time = now
-        }
-        BoxCache[cacheKey] = result
-        return true, result.x, result.y, result.w, result.h
-    end
-
-    -- Far distance: approximate using anchor size
-    if distance > 600 then
-        local ok, size, cf = pcall(function()
-            local s = anchor.Size
-            local c = anchor.CFrame
-            return s, c
-        end)
-        if not ok then return false, 0, 0, 0, 0 end
-
-        local HEIGHT = math.max(1, anchor.Size.Y * 2.5)
-        local WIDTH = math.max(1, math.max(anchor.Size.X, anchor.Size.Z) * 1.5)
-        local cf = anchor.CFrame
-        local sizeVec = Vector3.new(WIDTH, HEIGHT, WIDTH)
-        local corners = {
-            cf * CFrame.new( sizeVec.X/2,  sizeVec.Y/2,  sizeVec.Z/2),
-            cf * CFrame.new(-sizeVec.X/2,  sizeVec.Y/2,  sizeVec.Z/2),
-            cf * CFrame.new( sizeVec.X/2, -sizeVec.Y/2,  sizeVec.Z/2),
-            cf * CFrame.new(-sizeVec.X/2, -sizeVec.Y/2,  sizeVec.Z/2),
-            cf * CFrame.new( sizeVec.X/2,  sizeVec.Y/2, -sizeVec.Z/2),
-            cf * CFrame.new(-sizeVec.X/2,  sizeVec.Y/2, -sizeVec.Z/2),
-            cf * CFrame.new( sizeVec.X/2, -sizeVec.Y/2, -sizeVec.Z/2),
-            cf * CFrame.new(-sizeVec.X/2, -sizeVec.Y/2, -sizeVec.Z/2),
-        }
-
-        return computeFromPoints(corners)
-    end
-
-    -- Close distance: try model bounding box first
-    if model and distance <= 600 then
-        local success, cf, size = pcall(function()
+    
+    local cf, size
+    local useSimple = distance > 400
+    
+    -- Tenta usar GetBoundingBox para precisão (apenas em distâncias curtas)
+    if model and not useSimple then
+        local success
+        success, cf, size = pcall(function()
             return model:GetBoundingBox()
         end)
-        if success and cf and size then
-            local corners = {
-                cf * CFrame.new( size.X/2,  size.Y/2,  size.Z/2),
-                cf * CFrame.new(-size.X/2,  size.Y/2,  size.Z/2),
-                cf * CFrame.new( size.X/2, -size.Y/2,  size.Z/2),
-                cf * CFrame.new(-size.X/2, -size.Y/2,  size.Z/2),
-                cf * CFrame.new( size.X/2,  size.Y/2, -size.Z/2),
-                cf * CFrame.new(-size.X/2,  size.Y/2, -size.Z/2),
-                cf * CFrame.new( size.X/2, -size.Y/2, -size.Z/2),
-                cf * CFrame.new(-size.X/2, -size.Y/2, -size.Z/2),
-            }
-            return computeFromPoints(corners)
+        
+        if not success or not cf or not size then
+            cf = nil
+            size = nil
         end
     end
-
-    -- Fallback: single anchor point
-    local ok, screen = pcall(function() return Camera:WorldToViewportPoint(anchor.Position) end)
-    if ok and screen and screen.Z > 0 then
-        local x, y = screen.X - 8, screen.Y - 12
-        local w, h = 16, 24
-        local result = { visible = true, x = x, y = y, w = w, h = h, time = now }
-        BoxCache[cacheKey] = result
-        return true, x, y, w, h
+    
+    -- Fallback: usa o anchor com tamanho estimado
+    if not cf or not size then
+        cf = anchor.CFrame
+        -- Estima tamanho baseado no anchor (geralmente HumanoidRootPart)
+        local anchorSize = anchor.Size
+        size = Vector3.new(
+            math.max(anchorSize.X, 4) * 1.2,
+            math.max(anchorSize.Y, 5) * 1.1,
+            math.max(anchorSize.Z, 2) * 1.2
+        )
+        
+        -- Ajusta altura para cobrir personagem inteiro
+        size = Vector3.new(size.X, size.Y * 2.5, size.Z)
+        -- Move o centro para cima (personagem está acima do root)
+        cf = cf + Vector3.new(0, size.Y * 0.15, 0)
     end
-
-    BoxCache[cacheKey] = nil
+    
+    -- Calcula os 8 cantos do bounding box
+    local corners
+    if useSimple then
+        -- Versão simplificada: apenas 4 cantos principais
+        corners = {
+            (cf * CFrame.new(size.X/2, size.Y/2, 0)).Position,
+            (cf * CFrame.new(-size.X/2, size.Y/2, 0)).Position,
+            (cf * CFrame.new(size.X/2, -size.Y/2, 0)).Position,
+            (cf * CFrame.new(-size.X/2, -size.Y/2, 0)).Position,
+        }
+    else
+        -- Versão completa: todos os 8 cantos
+        corners = {
+            (cf * CFrame.new(size.X/2, size.Y/2, size.Z/2)).Position,
+            (cf * CFrame.new(-size.X/2, size.Y/2, size.Z/2)).Position,
+            (cf * CFrame.new(size.X/2, -size.Y/2, size.Z/2)).Position,
+            (cf * CFrame.new(-size.X/2, -size.Y/2, size.Z/2)).Position,
+            (cf * CFrame.new(size.X/2, size.Y/2, -size.Z/2)).Position,
+            (cf * CFrame.new(-size.X/2, size.Y/2, -size.Z/2)).Position,
+            (cf * CFrame.new(size.X/2, -size.Y/2, -size.Z/2)).Position,
+            (cf * CFrame.new(-size.X/2, -size.Y/2, -size.Z/2)).Position,
+        }
+    end
+    
+    -- Projeta para viewport
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
+    local anyVisible = false
+    
+    for _, cornerPos in ipairs(corners) do
+        local screenPos, onScreen = Camera:WorldToViewportPoint(cornerPos)
+        
+        if onScreen then
+            anyVisible = true
+            minX = math.min(minX, screenPos.X)
+            minY = math.min(minY, screenPos.Y)
+            maxX = math.max(maxX, screenPos.X)
+            maxY = math.max(maxY, screenPos.Y)
+        elseif screenPos.Z > 0 then
+            -- Está atrás da câmera mas próximo - ainda considera
+            anyVisible = true
+            minX = math.min(minX, screenPos.X)
+            minY = math.min(minY, screenPos.Y)
+            maxX = math.max(maxX, screenPos.X)
+            maxY = math.max(maxY, screenPos.Y)
+        end
+    end
+    
+    if anyVisible and minX < maxX and minY < maxY then
+        local width = maxX - minX
+        local height = maxY - minY
+        
+        -- Limita tamanho mínimo e máximo
+        width = math.clamp(width, 10, 1000)
+        height = math.clamp(height, 15, 1000)
+        
+        return true, minX, minY, width, height
+    end
+    
     return false, 0, 0, 0, 0
 end
 
--- Periodic cleanup
+local function GetBoxFromCache(anchor, model, distance)
+    if not anchor then return false, 0, 0, 0, 0 end
+    
+    local now = tick()
+    local cacheKey = model or anchor
+    local cached = BoxCache[cacheKey]
+    
+    -- Tempo de cache baseado na distância
+    local cacheTime
+    if distance > 600 then
+        cacheTime = 0.4
+    elseif distance > 300 then
+        cacheTime = 0.2
+    else
+        cacheTime = 0.08
+    end
+    
+    -- Verifica cache válido
+    if cached and (now - cached.time) < cacheTime then
+        -- Verifica se ainda está na tela
+        local testScreen, testVisible = Camera:WorldToViewportPoint(anchor.Position)
+        if testVisible or testScreen.Z > 0 then
+            return cached.visible, cached.x, cached.y, cached.w, cached.h
+        end
+    end
+    
+    -- Calcula novo bounding box
+    local visible, x, y, w, h = CalculateBoundingBox(anchor, model, distance)
+    
+    -- Atualiza cache
+    BoxCache[cacheKey] = {
+        visible = visible,
+        x = x,
+        y = y,
+        w = w,
+        h = h,
+        time = now
+    }
+    
+    return visible, x, y, w, h
+end
+
+-- Limpeza periódica do cache
 task.spawn(function()
-    while wait(5) do
+    while true do
+        wait(BOX_CACHE_CLEANUP_INTERVAL)
         SafeCall(function()
+            local now = tick()
+            local toRemove = {}
+            
             for key, cached in pairs(BoxCache) do
-                if tick() - (cached.time or 0) > 10 then
-                    BoxCache[key] = nil
+                if (now - cached.time) > BOX_CACHE_MAX_AGE then
+                    table.insert(toRemove, key)
                 end
+            end
+            
+            for _, key in ipairs(toRemove) do
+                BoxCache[key] = nil
             end
         end, "BoxCacheCleanup")
     end
 end)
 
 -- ============================================================================
--- SKELETON SYSTEM (improved detection + safety checks)
+-- SKELETON SYSTEM (Fixed)
 -- ============================================================================
 local SkeletonSystem = {
     LocalPlayerSkeleton = {
         Enabled = false,
         Lines = {},
-        Color = Settings.LocalSkeletonColor or Color3.fromRGB(0,255,255),
         LastUpdate = 0,
     },
-    GraphCache = {},
+    ConnectionCache = {},
+    CacheTimeout = 3,
 }
 
-function SkeletonSystem:BuildGraph(model)
-    if not model then return {}, nil end
-    if self.GraphCache[model] and tick() - (self.GraphCache[model].time or 0) < 5 then
-        return self.GraphCache[model].graph, self.GraphCache[model].torso
-    end
+-- Definições de skeleton por tipo de rig
+local SKELETON_R15 = {
+    {"Head", "UpperTorso"},
+    {"UpperTorso", "LowerTorso"},
+    {"UpperTorso", "LeftUpperArm"},
+    {"LeftUpperArm", "LeftLowerArm"},
+    {"LeftLowerArm", "LeftHand"},
+    {"UpperTorso", "RightUpperArm"},
+    {"RightUpperArm", "RightLowerArm"},
+    {"RightLowerArm", "RightHand"},
+    {"LowerTorso", "LeftUpperLeg"},
+    {"LeftUpperLeg", "LeftLowerLeg"},
+    {"LeftLowerLeg", "LeftFoot"},
+    {"LowerTorso", "RightUpperLeg"},
+    {"RightUpperLeg", "RightLowerLeg"},
+    {"RightLowerLeg", "RightFoot"}
+}
 
-    local graph = {}
-    for _, v in ipairs(model:GetDescendants()) do
-        if v:IsA("Motor6D") or v:IsA("Weld") or v:IsA("WeldConstraint") then
-            local a, b = v.Part0, v.Part1
-            if a and b and a:IsA("BasePart") and b:IsA("BasePart") then
-                graph[a] = graph[a] or {}
-                graph[b] = graph[b] or {}
-                table.insert(graph[a], b)
-                table.insert(graph[b], a)
-            end
-        end
-    end
+local SKELETON_R6 = {
+    {"Head", "Torso"},
+    {"Torso", "Left Arm"},
+    {"Torso", "Right Arm"},
+    {"Torso", "Left Leg"},
+    {"Torso", "Right Leg"}
+}
 
-    local torso, bestScore = nil, -1
-    for part, neighbors in pairs(graph) do
-        if part and part:IsA("BasePart") then
-            local degree = #neighbors
-            local volume = math.max(0.0001, part.Size.X * part.Size.Y * part.Size.Z)
-            local score = degree * 1.5 + volume * 0.0001
-            if score > bestScore then
-                bestScore = score
-                torso = part
-            end
-        end
-    end
+-- Versão simplificada para longas distâncias
+local SKELETON_R15_SIMPLE = {
+    {"Head", "UpperTorso"},
+    {"UpperTorso", "LowerTorso"},
+    {"UpperTorso", "LeftUpperArm"},
+    {"UpperTorso", "RightUpperArm"},
+    {"LowerTorso", "LeftUpperLeg"},
+    {"LowerTorso", "RightUpperLeg"},
+}
 
-    self.GraphCache[model] = { graph = graph, torso = torso, time = tick() }
-    return graph, torso
+local SKELETON_R6_SIMPLE = {
+    {"Head", "Torso"},
+    {"Torso", "Left Arm"},
+    {"Torso", "Right Arm"},
+}
+
+function SkeletonSystem:DetectRigType(model)
+    if not model then return "Unknown" end
+    
+    if model:FindFirstChild("UpperTorso") and model:FindFirstChild("LowerTorso") then
+        return "R15"
+    elseif model:FindFirstChild("Torso") and model:FindFirstChild("Left Arm") then
+        return "R6"
+    end
+    
+    return "Unknown"
 end
 
-function SkeletonSystem:GetConnectionsFromGraph(model)
-    local graph, torso = self:BuildGraph(model)
-    if not torso or not next(graph) then
-        return self:DetectSkeletonConnectionsFallback(model)
+function SkeletonSystem:GetConnections(model, simplified)
+    if not model then return {} end
+    
+    local now = tick()
+    local cacheKey = tostring(model) .. (simplified and "_simple" or "_full")
+    local cached = self.ConnectionCache[cacheKey]
+    
+    if cached and (now - cached.time) < self.CacheTimeout then
+        -- Verifica se as partes ainda existem
+        if cached.valid then
+            return cached.connections
+        end
     end
-
+    
+    local rigType = self:DetectRigType(model)
+    local skeleton
+    
+    if rigType == "R15" then
+        skeleton = simplified and SKELETON_R15_SIMPLE or SKELETON_R15
+    elseif rigType == "R6" then
+        skeleton = simplified and SKELETON_R6_SIMPLE or SKELETON_R6
+    else
+        -- Tenta detectar automaticamente via Motor6D
+        return self:DetectConnectionsAuto(model, simplified)
+    end
+    
     local connections = {}
-    local visited = {}
-    local function bfs(start)
-        local queue = {start}
-        visited[start] = true
-        while #queue > 0 do
-            local current = table.remove(queue, 1)
-            if graph[current] then
-                for _, neighbor in ipairs(graph[current]) do
-                    if not visited[neighbor] then
-                        table.insert(connections, {current, neighbor})
-                        visited[neighbor] = true
-                        table.insert(queue, neighbor)
-                    end
+    local valid = true
+    
+    for _, bonePair in ipairs(skeleton) do
+        local part1 = model:FindFirstChild(bonePair[1], true)
+        local part2 = model:FindFirstChild(bonePair[2], true)
+        
+        if part1 and part2 and part1:IsA("BasePart") and part2:IsA("BasePart") then
+            table.insert(connections, {part1, part2})
+        else
+            valid = false
+        end
+    end
+    
+    self.ConnectionCache[cacheKey] = {
+        connections = connections,
+        time = now,
+        valid = valid
+    }
+    
+    return connections
+end
+
+function SkeletonSystem:DetectConnectionsAuto(model, simplified)
+    if not model then return {} end
+    
+    local connections = {}
+    local parts = {}
+    
+    -- Encontra todas as conexões via Motor6D/Weld
+    for _, v in ipairs(model:GetDescendants()) do
+        if v:IsA("Motor6D") then
+            local p0, p1 = v.Part0, v.Part1
+            if p0 and p1 and p0:IsA("BasePart") and p1:IsA("BasePart") then
+                if p0:IsDescendantOf(model) and p1:IsDescendantOf(model) then
+                    table.insert(connections, {p0, p1})
+                    parts[p0] = true
+                    parts[p1] = true
                 end
             end
         end
     end
-    bfs(torso)
+    
+    -- Se simplificado, limita a 8 conexões
+    if simplified and #connections > 8 then
+        local simplified_conns = {}
+        for i = 1, 8 do
+            simplified_conns[i] = connections[i]
+        end
+        return simplified_conns
+    end
+    
     return connections
 end
 
-function SkeletonSystem:DetectSkeletonConnectionsFallback(model)
-    if not model then return {} end
-    local rigType = "Unknown"
-    if model:FindFirstChild("UpperTorso") and model:FindFirstChild("LowerTorso") then
-        rigType = "R15"
-    elseif model:FindFirstChild("Torso") and model:FindFirstChild("Left Arm") then
-        rigType = "R6"
+function SkeletonSystem:RenderSkeleton(model, lines, color, simplified)
+    if not model or not lines or #lines == 0 then
+        return
     end
-
-    local connections = {}
-    if rigType == "R15" then
-        local bones = {
-            {"Head", "UpperTorso"},
-            {"UpperTorso", "LowerTorso"},
-            {"UpperTorso", "LeftUpperArm"},
-            {"LeftUpperArm", "LeftLowerArm"},
-            {"LeftLowerArm", "LeftHand"},
-            {"UpperTorso", "RightUpperArm"},
-            {"RightUpperArm", "RightLowerArm"},
-            {"RightLowerArm", "RightHand"},
-            {"LowerTorso", "LeftUpperLeg"},
-            {"LeftUpperLeg", "LeftLowerLeg"},
-            {"LeftLowerLeg", "LeftFoot"},
-            {"LowerTorso", "RightUpperLeg"},
-            {"RightUpperLeg", "RightLowerLeg"},
-            {"RightLowerLeg", "RightFoot"}
-        }
-        for _, bone in ipairs(bones) do
-            local part1 = model:FindFirstChild(bone[1])
-            local part2 = model:FindFirstChild(bone[2])
-            if part1 and part2 then table.insert(connections, {part1, part2}) end
-        end
-    elseif rigType == "R6" then
-        local bones = {
-            {"Head", "Torso"},
-            {"Torso", "Left Arm"},
-            {"Torso", "Right Arm"},
-            {"Torso", "Left Leg"},
-            {"Torso", "Right Leg"}
-        }
-        for _, bone in ipairs(bones) do
-            local part1 = model:FindFirstChild(bone[1])
-            local part2 = model:FindFirstChild(bone[2])
-            if part1 and part2 then table.insert(connections, {part1, part2}) end
-        end
-    end
-    return connections
-end
-
-function SkeletonSystem:RenderSkeleton(model, lines, color, simplify)
-    if not model or not lines then return end
-    local connections = self:GetConnectionsFromGraph(model)
-
-    if simplify then
-        local simplified = {}
-        for _, bone in ipairs(connections) do
-            if #simplified >= 8 then break end
-            table.insert(simplified, bone)
-        end
-        connections = simplified
-    end
-
+    
+    local connections = self:GetConnections(model, simplified)
     local lineIndex = 1
+    
     for _, bone in ipairs(connections) do
         if lineIndex > #lines then break end
-        local part1 = bone[1]
-        local part2 = bone[2]
+        
+        local part1, part2 = bone[1], bone[2]
         local line = lines[lineIndex]
-        if part1 and part2 and line and part1:IsDescendantOf(workspace) and part2:IsDescendantOf(workspace) then
-            local ok1, screen1 = pcall(function() return Camera:WorldToViewportPoint(part1.Position or part1.CFrame.Position) end)
-            local ok2, screen2 = pcall(function() return Camera:WorldToViewportPoint(part2.Position or part2.CFrame.Position) end)
-            if ok1 and ok2 and screen1.Z > 0 and screen2.Z > 0 then
-                line.From = Vector2.new(screen1.X, screen1.Y)
-                line.To = Vector2.new(screen2.X, screen2.Y)
-                line.Color = color or Settings.SkeletonColor
-                line.Thickness = 2
+        
+        if not line then
+            lineIndex = lineIndex + 1
+            continue
+        end
+        
+        if part1 and part2 and 
+           part1:IsDescendantOf(workspace) and 
+           part2:IsDescendantOf(workspace) then
+            
+            local success, result = pcall(function()
+                local pos1, vis1 = Camera:WorldToViewportPoint(part1.Position)
+                local pos2, vis2 = Camera:WorldToViewportPoint(part2.Position)
+                return {pos1 = pos1, vis1 = vis1, pos2 = pos2, vis2 = vis2}
+            end)
+            
+            if success and result.vis1 and result.vis2 then
+                line.From = Vector2.new(result.pos1.X, result.pos1.Y)
+                line.To = Vector2.new(result.pos2.X, result.pos2.Y)
+                line.Color = color
+                line.Thickness = 1.5
                 line.Visible = true
-                line.ZIndex = 2
                 lineIndex = lineIndex + 1
             else
                 line.Visible = false
+                lineIndex = lineIndex + 1
             end
-        elseif line then
+        else
             line.Visible = false
+            lineIndex = lineIndex + 1
         end
     end
-
+    
+    -- Esconde linhas não usadas
     for i = lineIndex, #lines do
-        if lines[i] then lines[i].Visible = false end
+        if lines[i] then
+            lines[i].Visible = false
+        end
     end
 end
 
 function SkeletonSystem:InitLocalPlayerSkeleton()
-    for i = 1, 30 do
+    -- Limpa linhas antigas
+    for _, line in ipairs(self.LocalPlayerSkeleton.Lines) do
+        if line then
+            pcall(function() line:Remove() end)
+        end
+    end
+    self.LocalPlayerSkeleton.Lines = {}
+    
+    -- Cria novas linhas
+    for i = 1, 20 do
         local line = DrawingPool:Acquire("Line")
         if line then
             line.Thickness = 2
             line.Visible = false
-            line.Color = self.LocalPlayerSkeleton.Color
-            line.ZIndex = 2
+            line.Color = Settings.ESP.LocalSkeletonColor
+            line.ZIndex = 5
             table.insert(self.LocalPlayerSkeleton.Lines, line)
         end
     end
@@ -346,273 +448,570 @@ end
 
 function SkeletonSystem:UpdateLocalPlayerSkeleton()
     local now = tick()
-    if now - self.LocalPlayerSkeleton.LastUpdate < 0.06 then return end
-    self.LocalPlayerSkeleton.LastUpdate = now
-    if not Settings.Drawing.LocalSkeleton then
-        for _, line in ipairs(self.LocalPlayerSkeleton.Lines) do if line then line.Visible = false end end
+    
+    -- Rate limit
+    if (now - self.LocalPlayerSkeleton.LastUpdate) < 0.033 then
         return
     end
-    local LocalPlayer = Core.LocalPlayer
-    if not LocalPlayer or not LocalPlayer.Character then return end
-    self:RenderSkeleton(LocalPlayer.Character, self.LocalPlayerSkeleton.Lines, Settings.LocalSkeletonColor or self.LocalPlayerSkeleton.Color, false)
+    self.LocalPlayerSkeleton.LastUpdate = now
+    
+    -- Verifica se está habilitado
+    if not Settings.ESP.ShowLocalSkeleton then
+        for _, line in ipairs(self.LocalPlayerSkeleton.Lines) do
+            if line then line.Visible = false end
+        end
+        return
+    end
+    
+    local character = Core.LocalPlayer and Core.LocalPlayer.Character
+    if not character then
+        for _, line in ipairs(self.LocalPlayerSkeleton.Lines) do
+            if line then line.Visible = false end
+        end
+        return
+    end
+    
+    self:RenderSkeleton(
+        character,
+        self.LocalPlayerSkeleton.Lines,
+        Settings.ESP.LocalSkeletonColor,
+        false
+    )
+end
+
+function SkeletonSystem:ClearCache()
+    self.ConnectionCache = {}
 end
 
 -- ============================================================================
--- ESP CREATION & MANAGEMENT (robust, safer, fixed highlight adornee handling)
+-- ESP MANAGER
 -- ============================================================================
-local function CreateDrawing(type, properties)
-    local obj = DrawingPool:Acquire(type)
-    if obj then
-        for prop, value in pairs(properties or {}) do
-            pcall(function() obj[prop] = value end)
+local ESP = {}
+
+-- Cria um objeto de drawing com propriedades
+local function CreateDrawing(drawingType, properties)
+    local obj = DrawingPool:Acquire(drawingType)
+    if not obj then
+        warn("[ESP] Failed to acquire drawing: " .. drawingType)
+        return nil
+    end
+    
+    for prop, value in pairs(properties or {}) do
+        local success = pcall(function()
+            obj[prop] = value
+        end)
+        if not success then
+            warn("[ESP] Failed to set property: " .. prop)
         end
     end
+    
     return obj
 end
 
-local ESP = {}
-
 function ESP:CreatePlayerESP(player)
-    if not Core.DrawingOK or State.DrawingESP[player] then return end
-
-    local storage = {
-        Box = CreateDrawing("Square", {Thickness = 2, Filled = false, Visible = false, ZIndex = 2, Color = Settings.BoxColor}),
-        BoxOutline = CreateDrawing("Square", {Thickness = 4, Filled = false, Visible = false, ZIndex = 1, Color = Color3.new(0,0,0)}),
-        Name = CreateDrawing("Text", {Size = 13, Center = true, Outline = true, Font = 2, Visible = false, ZIndex = 3, Color = Color3.new(1,1,1)}),
-        Distance = CreateDrawing("Text", {Size = 12, Center = true, Outline = true, Font = 2, Visible = false, ZIndex = 3, Color = Color3.new(1,1,1)}),
-        HealthBar = CreateDrawing("Square", {Filled = true, Visible = false, ZIndex = 2}),
-        HealthOutline = CreateDrawing("Square", {Filled = true, Visible = false, ZIndex = 1, Color = Color3.new(0,0,0)}),
-        SkeletonLines = {},
-        Highlight = nil,
-        _lastBoxUpdate = 0,
-        _lastSkeletonUpdate = 0,
-        _cachedBox = {x = 0, y = 0, w = 0, h = 0, visible = false},
-    }
-
-    -- Create highlight but keep it disabled unless needed
-    local highlight
-    pcall(function()
-        highlight = Instance.new("Highlight")
-        highlight.Name = "ForgeESP_" .. player.Name
-        highlight.FillColor = Settings.HighlightFillColor or Color3.fromRGB(255,0,0)
-        highlight.OutlineColor = Settings.HighlightOutlineColor or Color3.fromRGB(255,255,255)
-        highlight.FillTransparency = Settings.HighlightTransparency or 0.5
-        highlight.OutlineTransparency = 0
-        highlight.Enabled = false
-        -- Parent to CoreGui is safer for UI-related instances
-        highlight.Parent = Core.CoreGui or game:GetService("CoreGui")
-    end)
-    storage.Highlight = highlight
-
-    for i = 1, 30 do
-        local line = CreateDrawing("Line", {Thickness = 2, Visible = false, Color = Settings.SkeletonColor, ZIndex = 2})
-        if line then table.insert(storage.SkeletonLines, line) end
+    if not Core.DrawingOK then
+        warn("[ESP] Drawing not available")
+        return
     end
-
+    
+    if State.DrawingESP[player] then
+        return -- Já existe
+    end
+    
+    local storage = {
+        -- Box
+        Box = CreateDrawing("Square", {
+            Thickness = 1,
+            Filled = false,
+            Visible = false,
+            ZIndex = 3,
+            Color = Settings.ESP.BoxColor,
+            Transparency = 1
+        }),
+        BoxOutline = CreateDrawing("Square", {
+            Thickness = 3,
+            Filled = false,
+            Visible = false,
+            ZIndex = 2,
+            Color = Color3.new(0, 0, 0),
+            Transparency = 1
+        }),
+        
+        -- Name
+        Name = CreateDrawing("Text", {
+            Size = 14,
+            Center = true,
+            Outline = true,
+            Font = 2,
+            Visible = false,
+            ZIndex = 4,
+            Color = Settings.ESP.NameColor
+        }),
+        
+        -- Distance
+        Distance = CreateDrawing("Text", {
+            Size = 12,
+            Center = true,
+            Outline = true,
+            Font = 2,
+            Visible = false,
+            ZIndex = 4,
+            Color = Settings.ESP.DistanceColor
+        }),
+        
+        -- Health Bar
+        HealthBarBg = CreateDrawing("Square", {
+            Filled = true,
+            Visible = false,
+            ZIndex = 2,
+            Color = Color3.new(0, 0, 0),
+            Transparency = 0.5
+        }),
+        HealthBar = CreateDrawing("Square", {
+            Filled = true,
+            Visible = false,
+            ZIndex = 3,
+            Color = Color3.new(0, 1, 0)
+        }),
+        
+        -- Skeleton
+        SkeletonLines = {},
+        
+        -- Highlight
+        Highlight = nil,
+        
+        -- Cache interno
+        _lastUpdate = 0,
+        _lastSkeletonUpdate = 0,
+        _lastBoxUpdate = 0,
+        _cachedBox = {visible = false, x = 0, y = 0, w = 0, h = 0},
+    }
+    
+    -- Cria linhas do skeleton
+    for i = 1, 20 do
+        local line = CreateDrawing("Line", {
+            Thickness = 1.5,
+            Visible = false,
+            Color = Settings.ESP.SkeletonColor,
+            ZIndex = 3
+        })
+        if line then
+            table.insert(storage.SkeletonLines, line)
+        end
+    end
+    
+    -- Cria Highlight
+    local success, highlight = pcall(function()
+        local h = Instance.new("Highlight")
+        h.Name = "ForgeESP_" .. player.Name
+        h.FillColor = Settings.ESP.HighlightFillColor
+        h.OutlineColor = Settings.ESP.HighlightOutlineColor
+        h.FillTransparency = Settings.ESP.HighlightFillTransparency
+        h.OutlineTransparency = Settings.ESP.HighlightOutlineTransparency
+        h.Enabled = false
+        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        h.Parent = Core.CoreGui
+        return h
+    end)
+    
+    if success and highlight then
+        storage.Highlight = highlight
+    end
+    
     State.DrawingESP[player] = storage
 end
 
 function ESP:RemovePlayerESP(player)
-    if not State.DrawingESP[player] then return end
     local storage = State.DrawingESP[player]
-
-    for key, obj in pairs(storage) do
-        if key:sub(1,1) ~= "_" and key ~= "SkeletonLines" and key ~= "Highlight" then
-            if obj then
-                local objType = nil
-                if key:find("Box") then objType = "Square"
-                elseif key:find("Name") or key:find("Distance") then objType = "Text"
-                elseif key:find("Health") then objType = "Square" end
-                if objType then DrawingPool:Release(objType, obj) end
-            end
-        end
-    end
-
-    for _, line in pairs(storage.SkeletonLines) do DrawingPool:Release("Line", line) end
-
-    if storage.Highlight then
-        pcall(function() storage.Highlight:Destroy() end)
-    end
-
-    State.DrawingESP[player] = nil
-    SemanticEngine:ClearPlayerCache(player)
-end
-
-local function HideESP(storage)
     if not storage then return end
-    if storage.Box then storage.Box.Visible = false storage.Box.Transparency = 0 end
-    if storage.BoxOutline then storage.BoxOutline.Visible = false storage.BoxOutline.Transparency = 0 end
-    if storage.Name then storage.Name.Visible = false end
-    if storage.Distance then storage.Distance.Visible = false end
-    if storage.HealthBar then storage.HealthBar.Visible = false end
-    if storage.HealthOutline then storage.HealthOutline.Visible = false end
-    if storage.Highlight and storage.Highlight.Enabled then storage.Highlight.Enabled = false end
-    for _, line in pairs(storage.SkeletonLines) do if line then line.Visible = false end end
-    storage._cachedBox = {x=0,y=0,w=0,h=0,visible=false}
+    
+    -- Remove drawings
+    local drawingTypes = {
+        Box = "Square",
+        BoxOutline = "Square",
+        Name = "Text",
+        Distance = "Text",
+        HealthBar = "Square",
+        HealthBarBg = "Square",
+    }
+    
+    for key, drawingType in pairs(drawingTypes) do
+        if storage[key] then
+            pcall(function()
+                storage[key].Visible = false
+            end)
+            DrawingPool:Release(drawingType, storage[key])
+        end
+    end
+    
+    -- Remove skeleton lines
+    for _, line in ipairs(storage.SkeletonLines or {}) do
+        if line then
+            pcall(function() line.Visible = false end)
+            DrawingPool:Release("Line", line)
+        end
+    end
+    
+    -- Remove highlight
+    if storage.Highlight then
+        pcall(function()
+            storage.Highlight.Enabled = false
+            storage.Highlight:Destroy()
+        end)
+    end
+    
+    State.DrawingESP[player] = nil
+    
+    -- Limpa cache do SemanticEngine
+    if SemanticEngine and SemanticEngine.ClearPlayerCache then
+        SemanticEngine:ClearPlayerCache(player)
+    end
 end
 
-function ESP:UpdatePlayerESP(player, storage)
-    if not player or player == Core.LocalPlayer then return end
-    Profiler:RecordESPUpdate()
-
-    local data = SemanticEngine:GetCachedPlayerData(player)
-    if not data or not data.isValid or not data.anchor then HideESP(storage) return end
-
-    local camPos = Camera.CFrame.Position
-    local toTarget = (data.anchor.Position - camPos)
-    local distance = toTarget.Magnitude
-
-    if distance > Settings.ESPMaxDistance then HideESP(storage) return end
-
-    if Settings.IgnoreTeamESP then
-        local sameTeam = SemanticEngine:AreSameTeam(Core.LocalPlayer, player)
-        if sameTeam then HideESP(storage) return end
-    end
-
-    if data.humanoid and data.humanoid.Health and data.humanoid.Health <= 0 then HideESP(storage) return end
-
-    -- Panic mode: extremely light rendering
-    if PerformanceManager.panicLevel >= 2 then
-        local visible, x, y, w, h = GetBoxFromAnchor(data.anchor, data.model, distance)
-        if visible and w > 0 and h > 0 and Settings.ShowBox and storage.Box then
-            storage.Box.Size = Vector2.new(w, h)
-            storage.Box.Position = Vector2.new(x, y)
-            storage.Box.Color = Settings.BoxColor
-            storage.Box.Visible = true
-        else
-            HideESP(storage)
-        end
+local function HideAllESP(storage)
+    if not storage then return end
+    
+    pcall(function()
+        if storage.Box then storage.Box.Visible = false end
         if storage.BoxOutline then storage.BoxOutline.Visible = false end
         if storage.Name then storage.Name.Visible = false end
         if storage.Distance then storage.Distance.Visible = false end
         if storage.HealthBar then storage.HealthBar.Visible = false end
-        if storage.HealthOutline then storage.HealthOutline.Visible = false end
-        if storage.Highlight then storage.Highlight.Enabled = false end
-        for _, line in pairs(storage.SkeletonLines) do if line then line.Visible = false end end
+        if storage.HealthBarBg then storage.HealthBarBg.Visible = false end
+        
+        if storage.Highlight then
+            storage.Highlight.Enabled = false
+            storage.Highlight.Adornee = nil
+        end
+        
+        for _, line in ipairs(storage.SkeletonLines or {}) do
+            if line then line.Visible = false end
+        end
+    end)
+    
+    storage._cachedBox = {visible = false, x = 0, y = 0, w = 0, h = 0}
+end
+
+function ESP:UpdatePlayerESP(player, storage)
+    if not player or player == Core.LocalPlayer then
+        HideAllESP(storage)
         return
     end
-
+    
+    -- Profiler tracking
+    if Profiler and Profiler.RecordESPUpdate then
+        Profiler:RecordESPUpdate()
+    end
+    
+    -- Obtém dados do jogador via SemanticEngine
+    local data
+    if SemanticEngine and SemanticEngine.GetCachedPlayerData then
+        data = SemanticEngine:GetCachedPlayerData(player)
+    else
+        -- Fallback se SemanticEngine não existir
+        local char = player.Character
+        data = {
+            isValid = char ~= nil,
+            model = char,
+            anchor = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")),
+            humanoid = char and char:FindFirstChildOfClass("Humanoid")
+        }
+    end
+    
+    -- Valida dados
+    if not data.isValid or not data.anchor then
+        HideAllESP(storage)
+        return
+    end
+    
+    -- Verifica se anchor existe no workspace
+    if not data.anchor:IsDescendantOf(workspace) then
+        HideAllESP(storage)
+        return
+    end
+    
+    -- Calcula distância
+    local camPos = Camera.CFrame.Position
+    local targetPos = data.anchor.Position
+    local distance = (targetPos - camPos).Magnitude
+    
+    -- Verifica distância máxima
+    if distance > Settings.ESP.MaxDistance then
+        HideAllESP(storage)
+        return
+    end
+    
+    -- Verifica time
+    if Settings.ESP.IgnoreTeam then
+        local sameTeam = false
+        if SemanticEngine and SemanticEngine.AreSameTeam then
+            sameTeam = SemanticEngine:AreSameTeam(Core.LocalPlayer, player)
+        else
+            -- Fallback
+            sameTeam = Core.LocalPlayer.Team and player.Team and Core.LocalPlayer.Team == player.Team
+        end
+        
+        if sameTeam then
+            HideAllESP(storage)
+            return
+        end
+    end
+    
+    -- Verifica se está morto
+    if data.humanoid and data.humanoid.Health <= 0 then
+        HideAllESP(storage)
+        return
+    end
+    
+    -- Panic mode - apenas box
+    if PerformanceManager and PerformanceManager.panicLevel and PerformanceManager.panicLevel >= 2 then
+        local visible, x, y, w, h = GetBoxFromCache(data.anchor, data.model, distance)
+        
+        if visible and w > 5 and h > 5 then
+            if storage.Box and Settings.ESP.ShowBox then
+                storage.Box.Size = Vector2.new(w, h)
+                storage.Box.Position = Vector2.new(x, y)
+                storage.Box.Color = Settings.ESP.BoxColor
+                storage.Box.Visible = true
+            end
+        else
+            if storage.Box then storage.Box.Visible = false end
+        end
+        
+        -- Esconde todo o resto
+        if storage.BoxOutline then storage.BoxOutline.Visible = false end
+        if storage.Name then storage.Name.Visible = false end
+        if storage.Distance then storage.Distance.Visible = false end
+        if storage.HealthBar then storage.HealthBar.Visible = false end
+        if storage.HealthBarBg then storage.HealthBarBg.Visible = false end
+        if storage.Highlight then storage.Highlight.Enabled = false end
+        for _, line in ipairs(storage.SkeletonLines or {}) do
+            if line then line.Visible = false end
+        end
+        return
+    end
+    
+    -- Calcula bounding box
     local now = tick()
     local visible, x, y, w, h
-    local updateInterval = distance > 500 and 0.25 or 0.1
-    if now - storage._lastBoxUpdate > updateInterval then
-        visible, x, y, w, h = GetBoxFromAnchor(data.anchor, data.model, distance)
-        storage._cachedBox = {x=x,y=y,w=w,h=h,visible=visible}
+    
+    local boxUpdateInterval = distance > 400 and 0.2 or 0.05
+    
+    if (now - storage._lastBoxUpdate) > boxUpdateInterval then
+        visible, x, y, w, h = GetBoxFromCache(data.anchor, data.model, distance)
+        storage._cachedBox = {visible = visible, x = x, y = y, w = w, h = h}
         storage._lastBoxUpdate = now
     else
         local cached = storage._cachedBox
-        visible, x, y, w, h = cached.visible, cached.x, cached.y, cached.w, cached.h
+        visible = cached.visible
+        x, y, w, h = cached.x, cached.y, cached.w, cached.h
     end
-
-    if not visible or w <= 0 or h <= 0 then HideESP(storage) return end
-
-    -- BOX
-    if storage.Box and Settings.ShowBox then
-        storage.Box.Size = Vector2.new(w, h)
-        storage.Box.Position = Vector2.new(x, y)
-        storage.Box.Color = Settings.BoxColor
-        storage.Box.Visible = true
+    
+    if not visible or w < 5 or h < 5 then
+        HideAllESP(storage)
+        return
+    end
+    
+    -- ==================== BOX ====================
+    if Settings.ESP.ShowBox then
+        if storage.Box then
+            storage.Box.Size = Vector2.new(w, h)
+            storage.Box.Position = Vector2.new(x, y)
+            storage.Box.Color = Settings.ESP.BoxColor
+            storage.Box.Visible = true
+        end
+        
         if storage.BoxOutline then
-            storage.BoxOutline.Size = Vector2.new(w, h)
-            storage.BoxOutline.Position = Vector2.new(x, y)
+            storage.BoxOutline.Size = Vector2.new(w + 2, h + 2)
+            storage.BoxOutline.Position = Vector2.new(x - 1, y - 1)
             storage.BoxOutline.Visible = true
         end
     else
         if storage.Box then storage.Box.Visible = false end
         if storage.BoxOutline then storage.BoxOutline.Visible = false end
     end
-
-    -- NAME
-    if storage.Name and Settings.ShowName then
+    
+    -- ==================== NAME ====================
+    if Settings.ESP.ShowName and storage.Name then
         storage.Name.Text = player.Name
-        storage.Name.Position = Vector2.new(x + w/2, y - 16)
-        storage.Name.Color = Settings.BoxColor or storage.Name.Color
+        storage.Name.Position = Vector2.new(x + w/2, y - 18)
+        storage.Name.Color = Settings.ESP.NameColor
         storage.Name.Visible = true
-    else
-        if storage.Name then storage.Name.Visible = false end
+    elseif storage.Name then
+        storage.Name.Visible = false
     end
-
-    -- DISTANCE
-    if storage.Distance and Settings.ShowDistance then
-        storage.Distance.Text = math.floor(distance) .. "m"
-        storage.Distance.Position = Vector2.new(x + w/2, y + h + 2)
+    
+    -- ==================== DISTANCE ====================
+    if Settings.ESP.ShowDistance and storage.Distance then
+        storage.Distance.Text = string.format("[%dm]", math.floor(distance))
+        storage.Distance.Position = Vector2.new(x + w/2, y + h + 3)
+        storage.Distance.Color = Settings.ESP.DistanceColor
         storage.Distance.Visible = true
-    else
-        if storage.Distance then storage.Distance.Visible = false end
+    elseif storage.Distance then
+        storage.Distance.Visible = false
     end
-
-    -- HEALTH BAR
-    if storage.HealthBar and Settings.ShowHealthBar and data.humanoid then
-        local maxH = data.humanoid.MaxHealth or 100
-        local healthPercent = math.clamp((data.humanoid.Health or 0) / maxH, 0, 1)
-        local barHeight = math.clamp(h * healthPercent, 1, h)
-
-        storage.HealthOutline.Size = Vector2.new(4, h + 2)
-        storage.HealthOutline.Position = Vector2.new(x - 6, y - 1)
-        storage.HealthOutline.Visible = true
-
-        storage.HealthBar.Size = Vector2.new(2, barHeight)
-        storage.HealthBar.Position = Vector2.new(x - 5, y + (h - barHeight))
-        storage.HealthBar.Color = Color3.new(1 - healthPercent, healthPercent, 0)
+    
+    -- ==================== HEALTH BAR ====================
+    if Settings.ESP.ShowHealthBar and data.humanoid and storage.HealthBar then
+        local maxHealth = data.humanoid.MaxHealth
+        local health = data.humanoid.Health
+        local healthPercent = math.clamp(health / maxHealth, 0, 1)
+        
+        local barWidth = 4
+        local barHeight = h
+        local barX = x - barWidth - 3
+        local barY = y
+        
+        -- Background
+        if storage.HealthBarBg then
+            storage.HealthBarBg.Size = Vector2.new(barWidth, barHeight)
+            storage.HealthBarBg.Position = Vector2.new(barX, barY)
+            storage.HealthBarBg.Visible = true
+        end
+        
+        -- Health bar (cresce de baixo para cima)
+        local healthHeight = barHeight * healthPercent
+        storage.HealthBar.Size = Vector2.new(barWidth - 2, healthHeight)
+        storage.HealthBar.Position = Vector2.new(barX + 1, barY + (barHeight - healthHeight))
+        
+        -- Cor baseada na vida (verde -> amarelo -> vermelho)
+        if healthPercent > 0.5 then
+            storage.HealthBar.Color = Color3.new(
+                (1 - healthPercent) * 2,
+                1,
+                0
+            )
+        else
+            storage.HealthBar.Color = Color3.new(
+                1,
+                healthPercent * 2,
+                0
+            )
+        end
         storage.HealthBar.Visible = true
     else
         if storage.HealthBar then storage.HealthBar.Visible = false end
-        if storage.HealthOutline then storage.HealthOutline.Visible = false end
+        if storage.HealthBarBg then storage.HealthBarBg.Visible = false end
     end
-
-    -- SKELETON
-    local skeletonMaxDist = Settings.Drawing.SkeletonMaxDistance or 250
-    if Settings.Drawing.Skeleton and distance <= skeletonMaxDist then
-        local skeletonInterval = distance > 200 and 0.15 or 0.1
-        if now - storage._lastSkeletonUpdate > skeletonInterval then
-            local simplify = distance > 150
-            SkeletonSystem:RenderSkeleton(data.model, storage.SkeletonLines, Settings.SkeletonColor, simplify)
+    
+    -- ==================== SKELETON ====================
+    if Settings.ESP.ShowSkeleton and distance <= Settings.ESP.SkeletonMaxDistance then
+        local skeletonInterval = distance > 150 and 0.1 or 0.05
+        
+        if (now - storage._lastSkeletonUpdate) > skeletonInterval then
+            local simplified = distance > 100
+            SkeletonSystem:RenderSkeleton(
+                data.model,
+                storage.SkeletonLines,
+                Settings.ESP.SkeletonColor,
+                simplified
+            )
             storage._lastSkeletonUpdate = now
         end
     else
-        for _, line in pairs(storage.SkeletonLines) do if line then line.Visible = false end end
+        for _, line in ipairs(storage.SkeletonLines or {}) do
+            if line then line.Visible = false end
+        end
     end
-
-    -- HIGHLIGHT (safe adornee assignment)
-    if storage.Highlight and Settings.ShowHighlight and distance < 500 then
-        local adornTarget = nil
-        -- Prefer model.PrimaryPart if available
-        if data.model and data.model.PrimaryPart and data.model.PrimaryPart:IsA("BasePart") then
-            adornTarget = data.model.PrimaryPart
-        elseif data.model and data.model:IsA("Model") then
-            adornTarget = data.model
-        else
-            adornTarget = data.anchor
+    
+    -- ==================== HIGHLIGHT ====================
+    if Settings.ESP.ShowHighlight and storage.Highlight and distance <= Settings.ESP.HighlightMaxDistance then
+        if storage.Highlight.Adornee ~= data.model then
+            storage.Highlight.Adornee = data.model
         end
-
-        if storage.Highlight.Adornee ~= adornTarget then
-            pcall(function() storage.Highlight.Adornee = adornTarget end)
-        end
-        if not storage.Highlight.Enabled then storage.Highlight.Enabled = true end
-    elseif storage.Highlight and storage.Highlight.Enabled then
+        
+        storage.Highlight.FillColor = Settings.ESP.HighlightFillColor
+        storage.Highlight.OutlineColor = Settings.ESP.HighlightOutlineColor
+        storage.Highlight.FillTransparency = Settings.ESP.HighlightFillTransparency
+        storage.Highlight.Enabled = true
+    elseif storage.Highlight then
         storage.Highlight.Enabled = false
     end
 end
 
 function ESP:UpdatePlayer(player)
-    if not State.DrawingESP[player] then self:CreatePlayerESP(player) end
-    if State.DrawingESP[player] then self:UpdatePlayerESP(player, State.DrawingESP[player]) end
+    if not Settings.ESP.Enabled then
+        if State.DrawingESP[player] then
+            HideAllESP(State.DrawingESP[player])
+        end
+        return
+    end
+    
+    if not State.DrawingESP[player] then
+        self:CreatePlayerESP(player)
+    end
+    
+    if State.DrawingESP[player] then
+        self:UpdatePlayerESP(player, State.DrawingESP[player])
+    end
 end
 
 function ESP:CleanupAll()
-    for player, _ in pairs(State.DrawingESP) do self:RemovePlayerESP(player) end
+    for player, _ in pairs(State.DrawingESP) do
+        self:RemovePlayerESP(player)
+    end
+    
+    SkeletonSystem:ClearCache()
+    BoxCache = {}
+end
+
+function ESP:UpdateSettings(newSettings)
+    if not newSettings then return end
+    
+    for key, value in pairs(newSettings) do
+        Settings.ESP[key] = value
+    end
+end
+
+function ESP:Toggle(enabled)
+    Settings.ESP.Enabled = enabled
+    
+    if not enabled then
+        for _, storage in pairs(State.DrawingESP) do
+            HideAllESP(storage)
+        end
+    end
 end
 
 function ESP:Initialize()
+    EnsureSettings()
     SkeletonSystem:InitLocalPlayerSkeleton()
+    
+    -- Loop de atualização do skeleton local
     task.spawn(function()
-        while wait(0.06) do
-            SafeCall(function() SkeletonSystem:UpdateLocalPlayerSkeleton() end, "LocalSkeletonUpdate")
+        while true do
+            wait(0.033) -- ~30 FPS
+            SafeCall(function()
+                SkeletonSystem:UpdateLocalPlayerSkeleton()
+            end, "LocalSkeletonUpdate")
         end
     end)
+    
+    print("[ESP] Initialized successfully")
 end
 
--- Export
+-- ============================================================================
+-- DEBUG FUNCTION
+-- ============================================================================
+function ESP:Debug()
+    print("=== ESP Debug ===")
+    print("Settings.ESP:", Settings.ESP)
+    print("Active ESP count:", #(function()
+        local count = 0
+        for _ in pairs(State.DrawingESP) do count = count + 1 end
+        return count
+    end)())
+    print("BoxCache entries:", #(function()
+        local count = 0
+        for _ in pairs(BoxCache) do count = count + 1 end
+        return count
+    end)())
+    print("================")
+end
+
+-- ============================================================================
+-- EXPORT
+-- ============================================================================
 Core.ESP = ESP
 Core.SkeletonSystem = SkeletonSystem
 
