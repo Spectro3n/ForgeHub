@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB - UI MODULE (FIXED)
+-- FORGEHUB - UI MODULE v4.0 (ULTRA RAGE EDITION)
 -- ============================================================================
 
 local Core = _G.ForgeHubCore
@@ -25,13 +25,11 @@ local LocalPlayer = Core.LocalPlayer
 local Players = Core.Players
 
 -- ============================================================================
--- SETTINGS SYNC (Garante compatibilidade com ESP module)
+-- SETTINGS SYNC
 -- ============================================================================
 local function EnsureSettingsCompat()
-    -- Cria Settings.ESP se não existir
     Settings.ESP = Settings.ESP or {}
     
-    -- Sincroniza settings antigos com novos
     local mappings = {
         {"ESPEnabled", "Enabled", true},
         {"ShowBox", "ShowBox", true},
@@ -52,30 +50,47 @@ local function EnsureSettingsCompat()
         end
     end
     
-    -- Drawing settings
     Settings.Drawing = Settings.Drawing or {}
-    if Settings.Drawing.Skeleton ~= nil then
-        Settings.ESP.ShowSkeleton = Settings.Drawing.Skeleton
-    end
-    if Settings.Drawing.LocalSkeleton ~= nil then
-        Settings.ESP.ShowLocalSkeleton = Settings.Drawing.LocalSkeleton
-    end
-    if Settings.Drawing.SkeletonMaxDistance ~= nil then
-        Settings.ESP.SkeletonMaxDistance = Settings.Drawing.SkeletonMaxDistance
-    end
-    
-    -- Defaults
     Settings.ESP.ShowSkeleton = Settings.ESP.ShowSkeleton or false
     Settings.ESP.ShowLocalSkeleton = Settings.ESP.ShowLocalSkeleton or false
     Settings.ESP.SkeletonMaxDistance = Settings.ESP.SkeletonMaxDistance or 300
+    
+    -- Rage settings defaults
+    Settings.RageMode = Settings.RageMode or false
+    Settings.UltraRageMode = Settings.UltraRageMode or false
+    Settings.GodRageMode = Settings.GodRageMode or false
+    
+    -- Silent Aim defaults
+    Settings.SilentAim = Settings.SilentAim or false
+    Settings.SilentFOV = Settings.SilentFOV or 500
+    Settings.SilentHitChance = Settings.SilentHitChance or 100
+    Settings.SilentHeadshotChance = Settings.SilentHeadshotChance or 100
+    
+    -- Magic Bullet defaults
+    Settings.MagicBullet = Settings.MagicBullet or false
+    Settings.MagicBulletMethod = Settings.MagicBulletMethod or "Teleport"
+    Settings.MagicBulletAutoHit = Settings.MagicBulletAutoHit or true
+    
+    -- Trigger Bot defaults
+    Settings.TriggerBot = Settings.TriggerBot or false
+    Settings.TriggerFOV = Settings.TriggerFOV or 50
+    Settings.TriggerDelay = Settings.TriggerDelay or 0.05
+    Settings.TriggerBurst = Settings.TriggerBurst or false
+    Settings.TriggerBurstCount = Settings.TriggerBurstCount or 3
+    Settings.TriggerHeadOnly = Settings.TriggerHeadOnly or false
+    
+    -- Aimbot FOV
+    Settings.AimbotFOV = Settings.AimbotFOV or 180
 end
 
 EnsureSettingsCompat()
 
 -- ============================================================================
--- FOV CIRCLE & TARGET INDICATOR
+-- FOV CIRCLES (Aimbot, Silent, Trigger)
 -- ============================================================================
 local FOVCircle = nil
+local SilentFOVCircle = nil
+local TriggerFOVCircle = nil
 local TargetIndicator = nil
 
 local function InitializeVisuals()
@@ -84,16 +99,40 @@ local function InitializeVisuals()
         return 
     end
     
-    -- FOV Circle
+    -- Aimbot FOV Circle
     FOVCircle = DrawingPool:Acquire("Circle")
     if FOVCircle then
         FOVCircle.Thickness = 1.5
         FOVCircle.NumSides = 64
-        FOVCircle.Radius = Settings.FOV or 100
+        FOVCircle.Radius = Settings.AimbotFOV or 180
         FOVCircle.Filled = false
         FOVCircle.Visible = false
         FOVCircle.Color = Settings.FOVColor or Color3.fromRGB(255, 255, 255)
         FOVCircle.Transparency = 1
+    end
+    
+    -- Silent Aim FOV Circle
+    SilentFOVCircle = DrawingPool:Acquire("Circle")
+    if SilentFOVCircle then
+        SilentFOVCircle.Thickness = 1.5
+        SilentFOVCircle.NumSides = 48
+        SilentFOVCircle.Radius = Settings.SilentFOV or 500
+        SilentFOVCircle.Filled = false
+        SilentFOVCircle.Visible = false
+        SilentFOVCircle.Color = Color3.fromRGB(255, 0, 255) -- Roxo para Silent
+        SilentFOVCircle.Transparency = 1
+    end
+    
+    -- Trigger Bot FOV Circle
+    TriggerFOVCircle = DrawingPool:Acquire("Circle")
+    if TriggerFOVCircle then
+        TriggerFOVCircle.Thickness = 2
+        TriggerFOVCircle.NumSides = 32
+        TriggerFOVCircle.Radius = Settings.TriggerFOV or 50
+        TriggerFOVCircle.Filled = false
+        TriggerFOVCircle.Visible = false
+        TriggerFOVCircle.Color = Color3.fromRGB(255, 255, 0) -- Amarelo para Trigger
+        TriggerFOVCircle.Transparency = 1
     end
     
     -- Target Indicator
@@ -110,23 +149,39 @@ local function InitializeVisuals()
 end
 
 local function UpdateVisuals()
-    -- FOV Circle Update
+    local success, mousePos = pcall(function()
+        return UserInputService:GetMouseLocation()
+    end)
+    
+    if not success or not mousePos then return end
+    
+    local mouseVec = Vector2.new(mousePos.X, mousePos.Y)
+    
+    -- Aimbot FOV Circle
     if FOVCircle then
         FOVCircle.Visible = Settings.ShowFOV or false
-        FOVCircle.Radius = math.clamp(Settings.FOV or 100, 1, 5000)
-        
-        local success, mousePos = pcall(function()
-            return UserInputService:GetMouseLocation()
-        end)
-        
-        if success and mousePos then
-            FOVCircle.Position = Vector2.new(mousePos.X, mousePos.Y)
-        end
-        
+        FOVCircle.Radius = math.clamp(Settings.AimbotFOV or 180, 1, 5000)
+        FOVCircle.Position = mouseVec
         FOVCircle.Color = Settings.FOVColor or Color3.fromRGB(255, 255, 255)
     end
     
-    -- Target Indicator Update
+    -- Silent FOV Circle
+    if SilentFOVCircle then
+        local showSilentFOV = Settings.SilentAim and (Settings.ShowSilentFOV or false)
+        SilentFOVCircle.Visible = showSilentFOV
+        SilentFOVCircle.Radius = math.clamp(Settings.SilentFOV or 500, 1, 5000)
+        SilentFOVCircle.Position = mouseVec
+    end
+    
+    -- Trigger FOV Circle
+    if TriggerFOVCircle then
+        local showTriggerFOV = Settings.TriggerBot and (Settings.ShowTriggerFOV or false)
+        TriggerFOVCircle.Visible = showTriggerFOV
+        TriggerFOVCircle.Radius = math.clamp(Settings.TriggerFOV or 50, 1, 1000)
+        TriggerFOVCircle.Position = mouseVec
+    end
+    
+    -- Target Indicator
     if TargetIndicator then
         local shouldShow = false
         
@@ -144,19 +199,33 @@ local function UpdateVisuals()
                     end
                     
                     if data and data.isValid and data.anchor then
-                        local success, result = pcall(function()
+                        local success2, result = pcall(function()
                             return Camera:WorldToViewportPoint(data.anchor.Position)
                         end)
                         
-                        if success then
+                        if success2 then
                             local screenPos, onScreen = result, select(2, Camera:WorldToViewportPoint(data.anchor.Position))
                             
                             if onScreen then
                                 TargetIndicator.Position = Vector2.new(screenPos.X, screenPos.Y)
                                 
-                                -- Pulse effect
+                                -- Pulse effect baseado no modo
                                 local pulse = math.abs(math.sin(tick() * 5))
-                                TargetIndicator.Color = Color3.fromRGB(0, 255 * pulse, 0)
+                                
+                                if Settings.GodRageMode then
+                                    TargetIndicator.Color = Color3.fromRGB(255, 215 * pulse, 0) -- Gold
+                                    TargetIndicator.Radius = 15
+                                elseif Settings.UltraRageMode then
+                                    TargetIndicator.Color = Color3.fromRGB(255, 0, 255 * pulse) -- Magenta
+                                    TargetIndicator.Radius = 12
+                                elseif Settings.RageMode then
+                                    TargetIndicator.Color = Color3.fromRGB(255, 100 * pulse, 0) -- Orange
+                                    TargetIndicator.Radius = 10
+                                else
+                                    TargetIndicator.Color = Color3.fromRGB(0, 255 * pulse, 0) -- Green
+                                    TargetIndicator.Radius = 8
+                                end
+                                
                                 shouldShow = true
                             end
                         end
@@ -176,16 +245,22 @@ local function SetupInputHandling()
     UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         
-        -- Aimbot Use Key (Hold)
         if isInputMatch and isInputMatch(input, Settings.AimbotUseKey) then 
             State.MouseHold = true 
         end
         
-        -- Aimbot Toggle Key
         if isInputMatch and isInputMatch(input, Settings.AimbotToggleKey) then 
             Settings.AimbotActive = not Settings.AimbotActive
             if Notify then
-                Notify("Aimbot", Settings.AimbotActive and "ATIVADO ✅" or "DESATIVADO ❌")
+                local status = Settings.AimbotActive and "ATIVADO ✅" or "DESATIVADO ❌"
+                if Settings.GodRageMode then
+                    status = status .. " 👑 GOD MODE"
+                elseif Settings.UltraRageMode then
+                    status = status .. " ⚡ ULTRA"
+                elseif Settings.RageMode then
+                    status = status .. " 🔥 RAGE"
+                end
+                Notify("Aimbot", status)
             end
         end
     end)
@@ -200,7 +275,7 @@ local function SetupInputHandling()
 end
 
 -- ============================================================================
--- RAYFIELD UI
+-- UI
 -- ============================================================================
 local UI = {
     Window = nil,
@@ -208,7 +283,6 @@ local UI = {
     UpdateConnection = nil,
 }
 
--- Helper para dropdown
 local function HandleDropdown(val)
     if type(val) == "table" and #val > 0 then 
         return val[1] 
@@ -216,7 +290,6 @@ local function HandleDropdown(val)
     return val
 end
 
--- Obtém estatísticas de forma segura
 local function GetTeamMethod()
     if SemanticEngine and SemanticEngine.TeamSystem and SemanticEngine.TeamSystem.Method then
         return SemanticEngine.TeamSystem.Method
@@ -261,9 +334,9 @@ function UI:CreateInterface()
     end
 
     local Window = Rayfield:CreateWindow({
-        Name = "ForgeHub Ultimate | v23.1 MODULAR ✅",
-        LoadingTitle = "Carregando Engine v23.1...",
-        LoadingSubtitle = "✅ Arquitetura modular\n✅ Sistema otimizado\n✅ Performance aprimorada",
+        Name = "ForgeHub Ultimate | v4.0 ULTRA RAGE 🔥",
+        LoadingTitle = "Carregando ForgeHub v4.0...",
+        LoadingSubtitle = "🔥 RAGE MODE\n⚡ ULTRA RAGE\n👑 GOD MODE\n✨ MAGIC BULLET",
         Theme = "AmberGlow",
         ToggleUIKeybind = "K",
         ConfigurationSaving = { Enabled = false }
@@ -272,16 +345,17 @@ function UI:CreateInterface()
     self.Window = Window
 
     local MainTab = Window:CreateTab("🎯 Legit Bot")
+    local RageTab = Window:CreateTab("🔥 RAGE")
     local ESPTab = Window:CreateTab("👁️ Visuals")
     local SystemTab = Window:CreateTab("⚙️ Sistema")
 
     -- ========================================================================
-    -- MAIN TAB - AIMBOT
+    -- MAIN TAB - AIMBOT LEGIT
     -- ========================================================================
-    MainTab:CreateSection("Atalhos Principais")
+    MainTab:CreateSection("⌨️ Atalhos Principais")
 
     MainTab:CreateInput({
-        Name = "⌨️ Tecla Aimbot Toggle",
+        Name = "Tecla Aimbot Toggle",
         PlaceholderText = "Q",
         RemoveTextAfterFocusLost = false,
         Callback = function(Text)
@@ -307,7 +381,7 @@ function UI:CreateInterface()
         end,
     })
 
-    MainTab:CreateSection("Configuração de Mira")
+    MainTab:CreateSection("🎯 Configuração Legit")
 
     MainTab:CreateToggle({
         Name = "🎯 Ativar Aimbot",
@@ -347,7 +421,7 @@ function UI:CreateInterface()
 
     MainTab:CreateSlider({
         Name = "📏 Distância Máxima",
-        Range = {100, 2000},
+        Range = {100, 3000},
         Increment = 100,
         CurrentValue = Settings.MaxDistance or 1000,
         Callback = function(v)
@@ -355,10 +429,10 @@ function UI:CreateInterface()
         end
     })
 
-    MainTab:CreateSection("FOV & Visuals")
+    MainTab:CreateSection("⭕ FOV & Visuals")
 
     MainTab:CreateToggle({
-        Name = "⭕ Mostrar FOV (Circle)",
+        Name = "⭕ Mostrar FOV Circle",
         CurrentValue = Settings.ShowFOV or false,
         Callback = function(v)
             Settings.ShowFOV = v
@@ -366,12 +440,16 @@ function UI:CreateInterface()
     })
 
     MainTab:CreateSlider({
-        Name = "📐 Tamanho FOV",
+        Name = "📐 Tamanho FOV Aimbot",
         Range = {10, 1000},
         Increment = 10,
-        CurrentValue = Settings.FOV or 100,
+        CurrentValue = Settings.AimbotFOV or 180,
         Callback = function(v)
+            Settings.AimbotFOV = v
             Settings.FOV = v
+            if Core.Aimbot and Core.Aimbot.SetAimbotFOV then
+                Core.Aimbot.SetAimbotFOV(v)
+            end
         end
     })
 
@@ -382,6 +460,8 @@ function UI:CreateInterface()
             Settings.ShowTargetIndicator = v
         end
     })
+
+    MainTab:CreateSection("🛡️ Filtros")
 
     MainTab:CreateToggle({
         Name = "🛡️ Ignorar Meu Time",
@@ -399,7 +479,7 @@ function UI:CreateInterface()
         end
     })
 
-    MainTab:CreateSection("Predição")
+    MainTab:CreateSection("🚀 Predição")
 
     MainTab:CreateToggle({
         Name = "🎯 Usar Predição",
@@ -419,11 +499,19 @@ function UI:CreateInterface()
         end
     })
 
-    MainTab:CreateSection("🔥 RAGE MODE")
+    -- ========================================================================
+    -- RAGE TAB - TODAS AS OPÇÕES RAGE
+    -- ========================================================================
+    RageTab:CreateSection("🔥 MODOS RAGE")
 
-    MainTab:CreateToggle({  
+    RageTab:CreateParagraph({
+        Title = "⚠️ AVISO",
+        Content = "Modos RAGE são muito óbvios!\nUse com cuidado para evitar ban."
+    })
+
+    RageTab:CreateToggle({
         Name = "🔥 Rage Mode",
-        CurrentValue = Settings.RageMode,
+        CurrentValue = Settings.RageMode or false,
         Callback = function(v)
             if Core.Aimbot and Core.Aimbot.SetRageMode then
                 Core.Aimbot.SetRageMode(v)
@@ -433,9 +521,9 @@ function UI:CreateInterface()
         end
     })
 
-    MainTab:CreateToggle({  
+    RageTab:CreateToggle({
         Name = "⚡ ULTRA RAGE MODE",
-        CurrentValue = Settings.UltraRageMode,
+        CurrentValue = Settings.UltraRageMode or false,
         Callback = function(v)
             if Core.Aimbot and Core.Aimbot.SetUltraRageMode then
                 Core.Aimbot.SetUltraRageMode(v)
@@ -445,41 +533,119 @@ function UI:CreateInterface()
         end
     })
 
-    MainTab:CreateToggle({  
-            Name = "👻 Silent Aim",
-            CurrentValue = Settings.SilentAim or false,
-            Callback = function(v)
-            Settings.SilentAim = v
+    RageTab:CreateToggle({
+        Name = "👑 GOD RAGE MODE (MÁXIMO)",
+        CurrentValue = Settings.GodRageMode or false,
+        Callback = function(v)
+            if Core.Aimbot and Core.Aimbot.SetGodRageMode then
+                Core.Aimbot.SetGodRageMode(v)
+            else
+                Settings.GodRageMode = v
+                if v then
+                    Settings.RageMode = true
+                    Settings.UltraRageMode = true
+                    Settings.IgnoreWalls = true
+                    Settings.SilentAim = true
+                    Settings.MagicBullet = true
+                end
+            end
+            
+            if v and Notify then
+                Notify("👑 GOD MODE", "TODOS OS PODERES ATIVADOS!")
+            end
         end
     })
 
-    MainTab:CreateToggle({  
-        Name = "🔫 Auto Fire",
-        CurrentValue = Settings.AutoFire or false,
+    RageTab:CreateSection("🎯 SILENT AIM")
+
+    RageTab:CreateToggle({
+        Name = "👻 Silent Aim",
+        CurrentValue = Settings.SilentAim or false,
         Callback = function(v)
-        Settings.AutoFire = v
-    end
+            Settings.SilentAim = v
+            if Core.Aimbot and Core.Aimbot.SetSilentAim then
+                Core.Aimbot.SetSilentAim(v)
+            end
+        end
     })
 
-    MainTab:CreateToggle({  
-    Name = "🔄 Auto Switch Target",
-    CurrentValue = Settings.AutoSwitch or false,
-    Callback = function(v)
-        Settings.AutoSwitch = v
-    end
+    RageTab:CreateToggle({
+        Name = "⭕ Mostrar Silent FOV",
+        CurrentValue = Settings.ShowSilentFOV or false,
+        Callback = function(v)
+            Settings.ShowSilentFOV = v
+        end
     })
 
-    MainTab:CreateSlider({  
-    Name = "⏱️ Switch Delay",
-    Range = {0.05, 1},
-    Increment = 0.05,
-    CurrentValue = Settings.TargetSwitchDelay or 0.3,
-    Callback = function(v)
-        Settings.TargetSwitchDelay = v
-    end
+    RageTab:CreateSlider({
+        Name = "📐 Silent FOV",
+        Range = {50, 2000},
+        Increment = 50,
+        CurrentValue = Settings.SilentFOV or 500,
+        Callback = function(v)
+            Settings.SilentFOV = v
+            if Core.Aimbot and Core.Aimbot.SetSilentFOV then
+                Core.Aimbot.SetSilentFOV(v)
+            end
+        end
     })
 
-    MainTab:CreateToggle({  
+    RageTab:CreateSlider({
+        Name = "🎲 Hit Chance (%)",
+        Range = {1, 100},
+        Increment = 1,
+        CurrentValue = Settings.SilentHitChance or 100,
+        Callback = function(v)
+            Settings.SilentHitChance = v
+        end
+    })
+
+    RageTab:CreateSlider({
+        Name = "🎯 Headshot Chance (%)",
+        Range = {1, 100},
+        Increment = 1,
+        CurrentValue = Settings.SilentHeadshotChance or 100,
+        Callback = function(v)
+            Settings.SilentHeadshotChance = v
+        end
+    })
+
+    RageTab:CreateSection("✨ MAGIC BULLET")
+
+    RageTab:CreateParagraph({
+        Title = "✨ Magic Bullet",
+        Content = "Faz sua bala atravessar paredes\ne acertar o inimigo automaticamente!"
+    })
+
+    RageTab:CreateToggle({
+        Name = "✨ Ativar Magic Bullet",
+        CurrentValue = Settings.MagicBullet or false,
+        Callback = function(v)
+            Settings.MagicBullet = v
+            if Core.Aimbot and Core.Aimbot.SetMagicBullet then
+                Core.Aimbot.SetMagicBullet(v)
+            end
+        end
+    })
+
+    RageTab:CreateDropdown({
+        Name = "🔮 Método Magic Bullet",
+        Options = {"Teleport", "Curve", "Phase"},
+        CurrentOption = {Settings.MagicBulletMethod or "Teleport"},
+        Callback = function(Option)
+            Settings.MagicBulletMethod = HandleDropdown(Option)
+        end
+    })
+
+    RageTab:CreateToggle({
+        Name = "💥 Auto Hit (Força registro)",
+        CurrentValue = Settings.MagicBulletAutoHit or true,
+        Callback = function(v)
+            Settings.MagicBulletAutoHit = v
+        end
+    })
+
+    RageTab:CreateToggle({
         Name = "🧱 Ignorar Paredes",
         CurrentValue = Settings.IgnoreWalls or false,
         Callback = function(v)
@@ -487,7 +653,107 @@ function UI:CreateInterface()
         end
     })
 
-    MainTab:CreateToggle({
+    RageTab:CreateSection("⚡ TRIGGER BOT")
+
+    RageTab:CreateToggle({
+        Name = "⚡ Ativar Trigger Bot",
+        CurrentValue = Settings.TriggerBot or false,
+        Callback = function(v)
+            Settings.TriggerBot = v
+            if Core.Aimbot and Core.Aimbot.SetTriggerBot then
+                Core.Aimbot.SetTriggerBot(v)
+            end
+        end
+    })
+
+    RageTab:CreateToggle({
+        Name = "⭕ Mostrar Trigger FOV",
+        CurrentValue = Settings.ShowTriggerFOV or false,
+        Callback = function(v)
+            Settings.ShowTriggerFOV = v
+        end
+    })
+
+    RageTab:CreateSlider({
+        Name = "📐 Trigger FOV",
+        Range = {5, 500},
+        Increment = 5,
+        CurrentValue = Settings.TriggerFOV or 50,
+        Callback = function(v)
+            Settings.TriggerFOV = v
+            if Core.Aimbot and Core.Aimbot.SetTriggerFOV then
+                Core.Aimbot.SetTriggerFOV(v)
+            end
+        end
+    })
+
+    RageTab:CreateSlider({
+        Name = "⏱️ Trigger Delay (seg)",
+        Range = {0.01, 0.5},
+        Increment = 0.01,
+        CurrentValue = Settings.TriggerDelay or 0.05,
+        Callback = function(v)
+            Settings.TriggerDelay = v
+        end
+    })
+
+    RageTab:CreateToggle({
+        Name = "💨 Modo Burst",
+        CurrentValue = Settings.TriggerBurst or false,
+        Callback = function(v)
+            Settings.TriggerBurst = v
+        end
+    })
+
+    RageTab:CreateSlider({
+        Name = "🔫 Tiros por Burst",
+        Range = {2, 10},
+        Increment = 1,
+        CurrentValue = Settings.TriggerBurstCount or 3,
+        Callback = function(v)
+            Settings.TriggerBurstCount = v
+        end
+    })
+
+    RageTab:CreateToggle({
+        Name = "🎯 Apenas Cabeça",
+        CurrentValue = Settings.TriggerHeadOnly or false,
+        Callback = function(v)
+            Settings.TriggerHeadOnly = v
+        end
+    })
+
+    RageTab:CreateSection("🔫 AUTO FIRE & SWITCH")
+
+    RageTab:CreateToggle({
+        Name = "🔫 Auto Fire",
+        CurrentValue = Settings.AutoFire or false,
+        Callback = function(v)
+            Settings.AutoFire = v
+        end
+    })
+
+    RageTab:CreateToggle({
+        Name = "🔄 Auto Switch Target",
+        CurrentValue = Settings.AutoSwitch or false,
+        Callback = function(v)
+            Settings.AutoSwitch = v
+        end
+    })
+
+    RageTab:CreateSlider({
+        Name = "⏱️ Switch Delay",
+        Range = {0.01, 1},
+        Increment = 0.01,
+        CurrentValue = Settings.TargetSwitchDelay or 0.1,
+        Callback = function(v)
+            Settings.TargetSwitchDelay = v
+        end
+    })
+
+    RageTab:CreateSection("🎯 CONFIGURAÇÕES EXTRA")
+
+    RageTab:CreateToggle({
         Name = "🎯 Multi-Part Aim",
         CurrentValue = Settings.MultiPartAim or false,
         Callback = function(v)
@@ -495,7 +761,7 @@ function UI:CreateInterface()
         end
     })
 
-    MainTab:CreateSlider({
+    RageTab:CreateSlider({
         Name = "📉 Shake Reduction",
         Range = {0, 10},
         Increment = 1,
@@ -505,7 +771,9 @@ function UI:CreateInterface()
         end
     })
 
-    MainTab:CreateButton({
+    RageTab:CreateSection("🔧 CONTROLES")
+
+    RageTab:CreateButton({
         Name = "🔄 Reset Aimbot",
         Callback = function()
             if Core.Aimbot and Core.Aimbot.ForceReset then
@@ -515,7 +783,7 @@ function UI:CreateInterface()
         end,
     })
 
-    MainTab:CreateButton({
+    RageTab:CreateButton({
         Name = "🐛 Debug Aimbot",
         Callback = function()
             if Core.Aimbot and Core.Aimbot.Debug then
@@ -525,17 +793,83 @@ function UI:CreateInterface()
         end,
     })
 
+    RageTab:CreateButton({
+        Name = "💀 ATIVAR TUDO (FULL RAGE)",
+        Callback = function()
+            -- Ativa tudo
+            Settings.RageMode = true
+            Settings.UltraRageMode = true
+            Settings.GodRageMode = true
+            Settings.SilentAim = true
+            Settings.MagicBullet = true
+            Settings.TriggerBot = true
+            Settings.AutoFire = true
+            Settings.AutoSwitch = true
+            Settings.IgnoreWalls = true
+            Settings.MultiPartAim = true
+            
+            if Core.Aimbot then
+                if Core.Aimbot.SetGodRageMode then
+                    Core.Aimbot.SetGodRageMode(true)
+                end
+                if Core.Aimbot.SetSilentAim then
+                    Core.Aimbot.SetSilentAim(true)
+                end
+                if Core.Aimbot.SetMagicBullet then
+                    Core.Aimbot.SetMagicBullet(true)
+                end
+                if Core.Aimbot.SetTriggerBot then
+                    Core.Aimbot.SetTriggerBot(true)
+                end
+            end
+            
+            Notify("💀 FULL RAGE", "TUDO ATIVADO! BOA SORTE!")
+        end,
+    })
+
+    RageTab:CreateButton({
+        Name = "🛑 DESATIVAR TUDO",
+        Callback = function()
+            Settings.RageMode = false
+            Settings.UltraRageMode = false
+            Settings.GodRageMode = false
+            Settings.SilentAim = false
+            Settings.MagicBullet = false
+            Settings.TriggerBot = false
+            Settings.AutoFire = false
+            Settings.AutoSwitch = false
+            Settings.IgnoreWalls = false
+            
+            if Core.Aimbot then
+                if Core.Aimbot.SetGodRageMode then
+                    Core.Aimbot.SetGodRageMode(false)
+                end
+                if Core.Aimbot.SetSilentAim then
+                    Core.Aimbot.SetSilentAim(false)
+                end
+                if Core.Aimbot.SetMagicBullet then
+                    Core.Aimbot.SetMagicBullet(false)
+                end
+                if Core.Aimbot.SetTriggerBot then
+                    Core.Aimbot.SetTriggerBot(false)
+                end
+            end
+            
+            Notify("🛑 RAGE OFF", "Todos os modos rage desativados")
+        end,
+    })
+
     -- ========================================================================
     -- ESP TAB
     -- ========================================================================
-    ESPTab:CreateSection("ESP Core")
+    ESPTab:CreateSection("👁️ ESP Core")
 
     ESPTab:CreateToggle({
         Name = "👁️ Ativar ESP",
         CurrentValue = Settings.ESP.Enabled,
         Callback = function(v)
             Settings.ESP.Enabled = v
-            Settings.ESPEnabled = v -- Compat
+            Settings.ESPEnabled = v
             
             if Core.ESP and Core.ESP.Toggle then
                 Core.ESP:Toggle(v)
@@ -548,7 +882,7 @@ function UI:CreateInterface()
         CurrentValue = Settings.ESP.IgnoreTeam,
         Callback = function(v)
             Settings.ESP.IgnoreTeam = v
-            Settings.IgnoreTeamESP = v -- Compat
+            Settings.IgnoreTeamESP = v
         end
     })
 
@@ -559,18 +893,18 @@ function UI:CreateInterface()
         CurrentValue = Settings.ESP.MaxDistance,
         Callback = function(v)
             Settings.ESP.MaxDistance = v
-            Settings.ESPMaxDistance = v -- Compat
+            Settings.ESPMaxDistance = v
         end
     })
 
-    ESPTab:CreateSection("Elementos Visuais")
+    ESPTab:CreateSection("📦 Elementos Visuais")
 
     ESPTab:CreateToggle({
         Name = "📦 Caixa (Box)",
         CurrentValue = Settings.ESP.ShowBox,
         Callback = function(v)
             Settings.ESP.ShowBox = v
-            Settings.ShowBox = v -- Compat
+            Settings.ShowBox = v
         end
     })
 
@@ -579,7 +913,7 @@ function UI:CreateInterface()
         CurrentValue = Settings.ESP.ShowName,
         Callback = function(v)
             Settings.ESP.ShowName = v
-            Settings.ShowName = v -- Compat
+            Settings.ShowName = v
         end
     })
 
@@ -588,7 +922,7 @@ function UI:CreateInterface()
         CurrentValue = Settings.ESP.ShowDistance,
         Callback = function(v)
             Settings.ESP.ShowDistance = v
-            Settings.ShowDistance = v -- Compat
+            Settings.ShowDistance = v
         end
     })
 
@@ -597,7 +931,7 @@ function UI:CreateInterface()
         CurrentValue = Settings.ESP.ShowHealthBar,
         Callback = function(v)
             Settings.ESP.ShowHealthBar = v
-            Settings.ShowHealthBar = v -- Compat
+            Settings.ShowHealthBar = v
         end
     })
 
@@ -606,7 +940,7 @@ function UI:CreateInterface()
         CurrentValue = Settings.ESP.ShowHighlight,
         Callback = function(v)
             Settings.ESP.ShowHighlight = v
-            Settings.ShowHighlight = v -- Compat
+            Settings.ShowHighlight = v
         end
     })
 
@@ -620,7 +954,7 @@ function UI:CreateInterface()
         end
     })
 
-    ESPTab:CreateSection("Skeleton")
+    ESPTab:CreateSection("🦴 Skeleton")
 
     ESPTab:CreateToggle({
         Name = "🦴 Skeleton (Esqueleto)",
@@ -628,7 +962,7 @@ function UI:CreateInterface()
         Callback = function(v)
             Settings.ESP.ShowSkeleton = v
             Settings.Drawing = Settings.Drawing or {}
-            Settings.Drawing.Skeleton = v -- Compat
+            Settings.Drawing.Skeleton = v
         end
     })
 
@@ -640,7 +974,7 @@ function UI:CreateInterface()
         Callback = function(v)
             Settings.ESP.SkeletonMaxDistance = v
             Settings.Drawing = Settings.Drawing or {}
-            Settings.Drawing.SkeletonMaxDistance = v -- Compat
+            Settings.Drawing.SkeletonMaxDistance = v
         end
     })
 
@@ -652,18 +986,15 @@ function UI:CreateInterface()
         Callback = function(v)
             Settings.ESP.ShowLocalSkeleton = v
             Settings.Drawing = Settings.Drawing or {}
-            Settings.Drawing.LocalSkeleton = v -- Compat
+            Settings.Drawing.LocalSkeleton = v
         end
     })
 
     -- ========================================================================
-    -- SYSTEM TAB (FIXED!)
+    -- SYSTEM TAB
     -- ========================================================================
     SystemTab:CreateSection("📊 Estatísticas")
 
-    -- IMPORTANTE: Rayfield CreateParagraph NÃO aceita função como Content!
-    -- Precisamos criar com strings estáticas e atualizar via :Set()
-    
     local teamParagraph = SystemTab:CreateParagraph({
         Title = "🎮 Sistema de Times",
         Content = "Método: " .. GetTeamMethod()
@@ -687,12 +1018,18 @@ function UI:CreateInterface()
     })
     self.StatsLabels.SemanticParagraph = semanticParagraph
 
-    -- ESP Stats
     local espParagraph = SystemTab:CreateParagraph({
         Title = "👁️ ESP Status",
         Content = "Carregando..."
     })
     self.StatsLabels.ESPParagraph = espParagraph
+
+    -- Rage Status
+    local rageParagraph = SystemTab:CreateParagraph({
+        Title = "🔥 Rage Status",
+        Content = "Carregando..."
+    })
+    self.StatsLabels.RageParagraph = rageParagraph
 
     SystemTab:CreateSection("🔧 Controles")
 
@@ -765,22 +1102,19 @@ function UI:CreateInterface()
     SystemTab:CreateSection("ℹ️ Informações")
 
     SystemTab:CreateParagraph({
-        Title = "ForgeHub v23.1 MODULAR",
-        Content = "✅ Arquitetura modular\n✅ Performance otimizada\n✅ Sistema adaptativo\n✅ ESP corrigido"
+        Title = "ForgeHub v4.0 ULTRA RAGE",
+        Content = "🔥 Rage Mode\n⚡ Ultra Rage Mode\n👑 God Rage Mode\n👻 Silent Aim com FOV\n✨ Magic Bullet\n⚡ Trigger Bot com FOV"
     })
 
-    -- Inicia loop de atualização de stats
     self:StartStatsUpdateLoop()
 
     return Window
 end
 
--- Atualiza as estatísticas na UI
 function UI:UpdateStats()
     if not self.StatsLabels then return end
     
     SafeCall(function()
-        -- Team Method
         if self.StatsLabels.TeamParagraph and self.StatsLabels.TeamParagraph.Set then
             self.StatsLabels.TeamParagraph:Set({
                 Title = "🎮 Sistema de Times",
@@ -788,7 +1122,6 @@ function UI:UpdateStats()
             })
         end
         
-        -- Performance
         if self.StatsLabels.PerfParagraph and self.StatsLabels.PerfParagraph.Set then
             local fps, panic = GetPerformanceStats()
             self.StatsLabels.PerfParagraph:Set({
@@ -797,7 +1130,6 @@ function UI:UpdateStats()
             })
         end
         
-        -- Semantic Engine
         if self.StatsLabels.SemanticParagraph and self.StatsLabels.SemanticParagraph.Set then
             local entities, containers, damage = GetSemanticStats()
             self.StatsLabels.SemanticParagraph:Set({
@@ -809,7 +1141,6 @@ function UI:UpdateStats()
             })
         end
         
-        -- ESP Status
         if self.StatsLabels.ESPParagraph and self.StatsLabels.ESPParagraph.Set then
             local espCount = 0
             if State.DrawingESP then
@@ -832,16 +1163,33 @@ function UI:UpdateStats()
                 )
             })
         end
+        
+        -- Rage Status
+        if self.StatsLabels.RageParagraph and self.StatsLabels.RageParagraph.Set then
+            local rageStatus = Settings.RageMode and "🔥" or "❌"
+            local ultraStatus = Settings.UltraRageMode and "⚡" or "❌"
+            local godStatus = Settings.GodRageMode and "👑" or "❌"
+            local silentStatus = Settings.SilentAim and "✅" or "❌"
+            local magicStatus = Settings.MagicBullet and "✅" or "❌"
+            local triggerStatus = Settings.TriggerBot and "✅" or "❌"
+            
+            self.StatsLabels.RageParagraph:Set({
+                Title = "🔥 Rage Status",
+                Content = string.format(
+                    "Rage: %s | Ultra: %s | God: %s\nSilent: %s | Magic: %s | Trigger: %s",
+                    rageStatus, ultraStatus, godStatus,
+                    silentStatus, magicStatus, triggerStatus
+                )
+            })
+        end
     end, "StatsUpdate")
 end
 
--- Loop de atualização de estatísticas
 function UI:StartStatsUpdateLoop()
     if self.UpdateConnection then
         self.UpdateConnection:Disconnect()
     end
     
-    -- Atualiza a cada 2 segundos
     task.spawn(function()
         while true do
             wait(2)
@@ -851,27 +1199,20 @@ function UI:StartStatsUpdateLoop()
 end
 
 function UI:Initialize()
-    -- Garante compatibilidade de settings
     EnsureSettingsCompat()
-    
-    -- Initialize visuals (FOV circle, target indicator)
     InitializeVisuals()
-    
-    -- Setup input handling
     SetupInputHandling()
     
-    -- Start visual update loop
     RunService.RenderStepped:Connect(function()
         SafeCall(function()
             UpdateVisuals()
         end, "VisualsUpdate")
     end)
     
-    -- Create UI with delay para garantir que outros módulos carregaram
     task.delay(1, function()
         SafeCall(function()
             self:CreateInterface()
-            print("[UI] Interface criada com sucesso!")
+            print("[UI] Interface v4.0 ULTRA RAGE criada!")
         end, "UICreation")
     end)
 end
@@ -889,7 +1230,6 @@ Players.PlayerAdded:Connect(function(player)
             SemanticEngine.TeamSystem.LastCheck = 0
         end
         
-        -- Auto-create ESP for new player
         task.delay(1, function()
             if Core.ESP and Core.ESP.CreatePlayerESP then
                 Core.ESP:CreatePlayerESP(player)
