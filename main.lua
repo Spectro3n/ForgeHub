@@ -257,17 +257,6 @@ task.spawn(function()
     UI:Initialize()
     
     wait(0.5)
-    
-    -- Notificação final
-    local teamMethod = Semantic.TeamSystem.Method or "Detectando..."
-    Notify("ForgeHub v23.1", string.format(
-        "✅ SISTEMA PRONTO!\n\n" ..
-        "🎮 Times: %s\n" ..
-        "⚡ FPS: %.1f\n\n" ..
-        "Pressione K para abrir menu",
-        teamMethod,
-        Performance.PerformanceManager.currentFPS
-    ))
 end)
 
 -- ============================================================================
@@ -335,10 +324,6 @@ local function Cleanup()
     _G.ForgeHubLoaded = false
     
     Notify("ForgeHub", "Sistema descarregado")
-end
-
-if game then
-    game:BindToClose(Cleanup)
 end
 
 -- Export cleanup
