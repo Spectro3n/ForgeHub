@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB - SEMANTIC ENGINE MODULE
+-- FORGEHUB - SEMANTIC ENGINE MODULE v2.0 (FIXED)
 -- ============================================================================
 
 local Core = _G.ForgeHubCore
@@ -7,343 +7,402 @@ if not Core then
     error("ForgeHubCore não encontrado! Carregue main.lua primeiro.")
 end
 
-local SafeCall = Core.SafeCall
+-- ============================================================================
+-- IMPORTS
+-- ============================================================================
 local Players = Core.Players
 local Workspace = Core.Workspace
 local LocalPlayer = Core.LocalPlayer
+local RunService = Core.RunService
+
+-- ============================================================================
+-- SAFE CALL
+-- ============================================================================
+local function SafeCall(func, name)
+    local success, err = pcall(func)
+    if not success then
+        warn("[Semantic] Erro em " .. (name or "unknown") .. ": " .. tostring(err))
+    end
+    return success
+end
+
+-- ============================================================================
+-- PLAYER CACHE (MELHORADO)
+-- ============================================================================
+local PlayerCache = {
+    Data = {},
+    CacheTime = 0.15, -- Cache mais curto para detectar mudanças rápido
+    StaggerOffset = {},
+}
+
+function PlayerCache:GetStagger(player)
+    if not self.StaggerOffset[player] then
+        self.StaggerOffset[player] = math.random() * 0.1
+    end
+    return self.StaggerOffset[player]
+end
+
+function PlayerCache:Get(player)
+    if not player then return nil end
+    
+    local now = tick()
+    local data = self.Data[player]
+    local stagger = self:GetStagger(player)
+    
+    -- Cache válido?
+    if data and (now - data.lastUpdate) < (self.CacheTime + stagger) then
+        return data
+    end
+    
+    return nil
+end
+
+function PlayerCache:Set(player, data)
+    if not player then return end
+    self.Data[player] = data
+end
+
+function PlayerCache:Clear(player)
+    if player then
+        self.Data[player] = nil
+        self.StaggerOffset[player] = nil
+    else
+        self.Data = {}
+        self.StaggerOffset = {}
+    end
+end
+
+function PlayerCache:ClearAll()
+    self.Data = {}
+    self.StaggerOffset = {}
+end
 
 -- ============================================================================
 -- SEMANTIC ENGINE
 -- ============================================================================
 local SemanticEngine = {
+    -- Definições aprendidas
     TargetDefinitions = {
-        HitboxParts = {},
-        CombatModels = {},
-        EntityToPlayer = {},
+        HitboxParts = {},        -- part -> true
+        CombatModels = {},       -- model -> true
+        EntityToPlayer = {},     -- model -> player (IMPORTANTE!)
+        PlayerToEntity = {},     -- player -> model (REVERSO!)
     },
     
+    -- Sistema de times
     TeamSystem = {
         Method = "Unknown",
-        CurrentPartition = nil,
+        CurrentPartition = {},
         ForceFFA = false,
         AutoDetected = false,
         LastCheck = 0,
+        CheckInterval = 3,
     },
     
+    -- Containers conhecidos
     ContainerSystem = {
         KnownContainers = {},
         LastScan = 0,
         ScanInterval = 5,
     },
     
-    IncrementalScan = {
-        Queue = {},
-        ProcessedIndex = 0,
-        ObjectsPerTick = 20,
-        LastTick = 0,
-        TickInterval = 0.1,
-        Completed = false,
-    },
-    
+    -- Estatísticas
     Stats = {
         DamageEventsDetected = 0,
         EntitiesLearned = 0,
         ContainersFound = 0,
-        ScansCompleted = 0,
+        PlayersTracked = 0,
     },
     
+    -- Estado
     _initialized = false,
+    _connections = {},
 }
 
 -- ============================================================================
--- PLAYER CACHE
+-- PLAYER TRACKING (NOVO - CRUCIAL!)
 -- ============================================================================
-local PlayerCache = {}
-local _cacheStagger = 0
+function SemanticEngine:TrackPlayer(player)
+    if not player or player == LocalPlayer then return end
+    
+    -- Limpa cache antigo
+    PlayerCache:Clear(player)
+    
+    -- Remove mapeamentos antigos
+    self.TargetDefinitions.PlayerToEntity[player] = nil
+    
+    -- Procura entidade existente
+    local entity = self:FindEntityForPlayer(player)
+    if entity then
+        self:LinkPlayerToEntity(player, entity)
+    end
+    
+    -- Aguarda Character carregar
+    if not player.Character then
+        local conn
+        conn = player.CharacterAdded:Connect(function(character)
+            task.wait(0.1) -- Aguarda character inicializar
+            PlayerCache:Clear(player)
+            self:LinkPlayerToEntity(player, character)
+            
+            -- Observa quando character é destruído
+            character.AncestryChanged:Connect(function(_, parent)
+                if not parent then
+                    PlayerCache:Clear(player)
+                    self.TargetDefinitions.EntityToPlayer[character] = nil
+                    self.TargetDefinitions.PlayerToEntity[player] = nil
+                end
+            end)
+        end)
+        table.insert(self._connections, conn)
+    else
+        self:LinkPlayerToEntity(player, player.Character)
+    end
+    
+    self.Stats.PlayersTracked = self.Stats.PlayersTracked + 1
+end
 
+function SemanticEngine:UntrackPlayer(player)
+    if not player then return end
+    
+    -- Limpa cache
+    PlayerCache:Clear(player)
+    
+    -- Remove mapeamentos
+    local entity = self.TargetDefinitions.PlayerToEntity[player]
+    if entity then
+        self.TargetDefinitions.EntityToPlayer[entity] = nil
+    end
+    self.TargetDefinitions.PlayerToEntity[player] = nil
+    
+    -- Remove do TeamSystem
+    if self.TeamSystem.CurrentPartition then
+        self.TeamSystem.CurrentPartition[player] = nil
+    end
+end
+
+function SemanticEngine:LinkPlayerToEntity(player, entity)
+    if not player or not entity then return end
+    
+    self.TargetDefinitions.EntityToPlayer[entity] = player
+    self.TargetDefinitions.PlayerToEntity[player] = entity
+    self.TargetDefinitions.CombatModels[entity] = true
+    self.Stats.EntitiesLearned = self.Stats.EntitiesLearned + 1
+end
+
+-- ============================================================================
+-- FIND ENTITY FOR PLAYER (MELHORADO)
+-- ============================================================================
+function SemanticEngine:FindEntityForPlayer(player)
+    if not player then return nil end
+    
+    -- 1. Mapeamento direto existente
+    local mapped = self.TargetDefinitions.PlayerToEntity[player]
+    if mapped and mapped.Parent then
+        return mapped
+    end
+    
+    -- 2. Character padrão
+    if player.Character and player.Character.Parent then
+        return player.Character
+    end
+    
+    -- 3. Busca em containers conhecidos
+    for container, _ in pairs(self.ContainerSystem.KnownContainers) do
+        if container and container.Parent then
+            local found = container:FindFirstChild(player.Name)
+            if found and found:IsA("Model") then
+                return found
+            end
+        end
+    end
+    
+    -- 4. Busca direta no Workspace
+    local wsChild = Workspace:FindFirstChild(player.Name)
+    if wsChild and wsChild:IsA("Model") then
+        return wsChild
+    end
+    
+    -- 5. Busca por DisplayName
+    if player.DisplayName and player.DisplayName ~= player.Name then
+        local displayChild = Workspace:FindFirstChild(player.DisplayName)
+        if displayChild and displayChild:IsA("Model") then
+            return displayChild
+        end
+    end
+    
+    return nil
+end
+
+-- ============================================================================
+-- GET CACHED PLAYER DATA (REESCRITO)
+-- ============================================================================
 function SemanticEngine:GetCachedPlayerData(player)
-    local now = tick()
-    local data = PlayerCache[player]
-    
-    if not data then
-        _cacheStagger = (_cacheStagger + 0.1) % 1.0
+    if not player then
+        return { isValid = false }
     end
     
-    local cacheTime = 0.25 + (_cacheStagger or 0)
-    
-    if data and now - data.lastUpdate < cacheTime then
-        return data
+    -- Verifica cache
+    local cached = PlayerCache:Get(player)
+    if cached then
+        return cached
     end
     
-    local model = self:FindRealTarget(player)
-    local anchor = nil
-    local humanoid = nil
-    local team = self:GetPlayerTeam(player)
+    -- Constrói dados frescos
+    local data = self:BuildPlayerData(player)
     
-    if model then
-        anchor = self:GetPlayerAnchor(player, model)
-        humanoid = model:FindFirstChildOfClass("Humanoid")
-    end
+    -- Salva no cache
+    PlayerCache:Set(player, data)
     
-    data = {
-        model = model,
-        anchor = anchor,
-        team = team,
-        humanoid = humanoid,
-        lastUpdate = now,
-        isValid = model ~= nil and anchor ~= nil,
-    }
-    
-    PlayerCache[player] = data
     return data
 end
 
+function SemanticEngine:BuildPlayerData(player)
+    local now = tick()
+    
+    -- Encontra modelo/entidade
+    local model = self:FindEntityForPlayer(player)
+    
+    if not model or not model.Parent then
+        return {
+            isValid = false,
+            model = nil,
+            anchor = nil,
+            humanoid = nil,
+            team = nil,
+            lastUpdate = now,
+        }
+    end
+    
+    -- Encontra anchor (root part)
+    local anchor = self:GetAnchorPart(model)
+    
+    -- Encontra humanoid
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    
+    -- Obtém time
+    local team = self:GetPlayerTeam(player)
+    
+    -- Atualiza mapeamento
+    if model then
+        self:LinkPlayerToEntity(player, model)
+    end
+    
+    return {
+        isValid = anchor ~= nil and anchor:IsDescendantOf(workspace),
+        model = model,
+        anchor = anchor,
+        humanoid = humanoid,
+        team = team,
+        lastUpdate = now,
+    }
+end
+
+-- ============================================================================
+-- GET ANCHOR PART (MELHORADO)
+-- ============================================================================
+function SemanticEngine:GetAnchorPart(model)
+    if not model then return nil end
+    
+    -- Ordem de prioridade
+    local candidates = {
+        "HumanoidRootPart",
+        "Torso",
+        "UpperTorso",
+        "LowerTorso",
+        "Root",
+        "RootPart",
+        "Head",
+    }
+    
+    for _, name in ipairs(candidates) do
+        local part = model:FindFirstChild(name)
+        if part and part:IsA("BasePart") and part:IsDescendantOf(workspace) then
+            return part
+        end
+    end
+    
+    -- PrimaryPart
+    if model.PrimaryPart and model.PrimaryPart:IsDescendantOf(workspace) then
+        return model.PrimaryPart
+    end
+    
+    -- Humanoid.RootPart
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.RootPart and humanoid.RootPart:IsDescendantOf(workspace) then
+        return humanoid.RootPart
+    end
+    
+    -- Qualquer BasePart
+    for _, child in ipairs(model:GetChildren()) do
+        if child:IsA("BasePart") and child:IsDescendantOf(workspace) then
+            return child
+        end
+    end
+    
+    return nil
+end
+
+-- ============================================================================
+-- CLEAR PLAYER CACHE (PÚBLICO)
+-- ============================================================================
 function SemanticEngine:ClearPlayerCache(player)
-    if not player then return end
-    PlayerCache[player] = nil
+    PlayerCache:Clear(player)
 end
 
--- ============================================================================
--- INCREMENTAL SCAN
--- ============================================================================
-function SemanticEngine:InitializeIncrementalScan()
-    self.IncrementalScan.Queue = {}
-    self.IncrementalScan.ProcessedIndex = 0
-    self.IncrementalScan.Completed = false
-    
-    local priorityContainers = {
-        Workspace,
-        game.ReplicatedStorage,
-    }
-    
-    for _, container in ipairs(priorityContainers) do
-        SafeCall(function()
-            for _, child in ipairs(container:GetChildren()) do
-                table.insert(self.IncrementalScan.Queue, child)
-            end
-        end, "InitScan")
-    end
-    
-    for container, _ in pairs(self.ContainerSystem.KnownContainers) do
-        if container and container.Parent then
-            SafeCall(function()
-                for _, child in ipairs(container:GetChildren()) do
-                    table.insert(self.IncrementalScan.Queue, child)
-                end
-            end, "InitScan")
-        end
-    end
-end
-
-function SemanticEngine:ProcessIncrementalScan()
-    local now = tick()
-    if now - self.IncrementalScan.LastTick < self.IncrementalScan.TickInterval then
-        return
-    end
-    
-    self.IncrementalScan.LastTick = now
-    
-    local queue = self.IncrementalScan.Queue
-    local startIndex = self.IncrementalScan.ProcessedIndex + 1
-    local endIndex = math.min(startIndex + self.IncrementalScan.ObjectsPerTick - 1, #queue)
-    
-    if startIndex > #queue then
-        if not self.IncrementalScan.Completed then
-            self.IncrementalScan.Completed = true
-            self.Stats.ScansCompleted = self.Stats.ScansCompleted + 1
-        end
-        return
-    end
-    
-    for i = startIndex, endIndex do
-        local obj = queue[i]
-        if obj and obj.Parent then
-            self:LearnFromObject(obj)
-        end
-    end
-    
-    self.IncrementalScan.ProcessedIndex = endIndex
-end
-
-function SemanticEngine:LearnFromObject(obj)
-    SafeCall(function()
-        if obj:IsA("Model") then
-            local humanoid = obj:FindFirstChildOfClass("Humanoid")
-            if humanoid then
-                self.TargetDefinitions.CombatModels[obj] = true
-                self.Stats.EntitiesLearned = self.Stats.EntitiesLearned + 1
-                
-                local linkedPlayer = self:GetPlayerFromModel(obj)
-                if linkedPlayer then
-                    self.TargetDefinitions.EntityToPlayer[obj] = linkedPlayer
-                end
-            end
-        end
-        
-        if obj:IsA("BasePart") then
-            local name = obj.Name:lower()
-            if name:match("hitbox") or name:match("hit") or name:match("damage") then
-                self.TargetDefinitions.HitboxParts[obj] = true
-            end
-        end
-    end, "LearnFromObject")
-end
-
--- ============================================================================
--- CONTINUOUS LEARNING
--- ============================================================================
-function SemanticEngine:StartContinuousLearning()
-    local connections = Core.State.Connections
-    local remotes = {}
-    local containers = {game.ReplicatedStorage}
-    
-    for _, container in ipairs(containers) do
-        SafeCall(function()
-            for _, obj in ipairs(container:GetDescendants()) do
-                if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                    local name = obj.Name:lower()
-                    
-                    if name:match("damage") or name:match("hit") or name:match("attack") 
-                       or name:match("combat") or name:match("health") then
-                        table.insert(remotes, obj)
-                    end
-                end
-            end
-        end, "FindRemotes")
-    end
-    
-    for _, remote in ipairs(remotes) do
-        SafeCall(function()
-            if remote:IsA("RemoteEvent") then
-                local connection = remote.OnClientEvent:Connect(function(...)
-                    self:LearnFromCombatEvent(remote, {...})
-                end)
-                table.insert(connections, connection)
-            end
-        end, "ConnectRemote")
-    end
-end
-
-function SemanticEngine:LearnFromCombatEvent(remote, args)
-    self.Stats.DamageEventsDetected = self.Stats.DamageEventsDetected + 1
-    
-    for _, arg in ipairs(args) do
-        if typeof(arg) == "Instance" then
-            if arg:IsA("Model") then
-                self.TargetDefinitions.CombatModels[arg] = true
-                self.Stats.EntitiesLearned = self.Stats.EntitiesLearned + 1
-                
-                local linkedPlayer = self:GetPlayerFromModel(arg)
-                if linkedPlayer then
-                    self.TargetDefinitions.EntityToPlayer[arg] = linkedPlayer
-                end
-            end
-            
-            if arg:IsA("BasePart") then
-                self.TargetDefinitions.HitboxParts[arg] = true
-                
-                local model = arg:FindFirstAncestorOfClass("Model")
-                if model then
-                    self.TargetDefinitions.CombatModels[model] = true
-                    self.Stats.EntitiesLearned = self.Stats.EntitiesLearned + 1
-                end
-            end
-        end
-    end
-end
-
--- ============================================================================
--- CONTAINER SCANNING
--- ============================================================================
-function SemanticEngine:ScanForContainers()
-    local now = tick()
-    if now - self.ContainerSystem.LastScan < self.ContainerSystem.ScanInterval then
-        return
-    end
-    
-    self.ContainerSystem.LastScan = now
-    
-    local containerNames = {
-        "Characters", "Players", "Entities", "Alive", "InGame", "ActivePlayers", 
-        "NPCs", "Enemies", "Bots", "Units", "Team1", "Team2", "Arena"
-    }
-    
-    for _, name in ipairs(containerNames) do
-        SafeCall(function()
-            local container = Workspace:FindFirstChild(name)
-            if container and (container:IsA("Folder") or container:IsA("Model")) then
-                if not self.ContainerSystem.KnownContainers[container] then
-                    self.ContainerSystem.KnownContainers[container] = {
-                        name = name,
-                        found = now,
-                    }
-                    self.Stats.ContainersFound = self.Stats.ContainersFound + 1
-                end
-            end
-        end, "ScanContainers")
-    end
+function SemanticEngine:ClearAllCache()
+    PlayerCache:ClearAll()
 end
 
 -- ============================================================================
 -- TEAM SYSTEM
 -- ============================================================================
-function SemanticEngine:ScorePartition(partition)
-    local groups = {}
-    local playerCount = 0
-    
-    for player, key in pairs(partition) do
-        if key ~= "__nil" then
-            groups[key] = (groups[key] or 0) + 1
-        end
-        playerCount = playerCount + 1
-    end
-    
-    local groupCount = 0
-    local maxGroupSize = 0
-    local minGroupSize = math.huge
-    
-    for k, count in pairs(groups) do
-        groupCount = groupCount + 1
-        maxGroupSize = math.max(maxGroupSize, count)
-        minGroupSize = math.min(minGroupSize, count)
-    end
-    
-    if groupCount < 2 or groupCount > 8 then
-        return 0
-    end
-    
-    local balance = minGroupSize / math.max(maxGroupSize, 1)
-    local coverage = (playerCount - (groups["__nil"] or 0)) / math.max(playerCount, 1)
-    
-    return groupCount * balance * coverage * 100
-end
-
 function SemanticEngine:DetectTeamSystemWithVoting()
-    local players = Core.CachedPlayers
+    local players = Players:GetPlayers()
     if #players < 2 then
-        self.TeamSystem.Method = "FFA_AutoDetected"
+        self.TeamSystem.Method = "FFA"
         self.TeamSystem.ForceFFA = true
+        self.TeamSystem.AutoDetected = true
         return
     end
     
     local partitions = {}
     
+    -- Método 1: Roblox Teams
     SafeCall(function()
         local Teams = game:GetService("Teams")
-        if Teams and #Teams:GetChildren() > 0 then
+        local teams = Teams:GetChildren()
+        
+        if #teams > 0 then
             partitions.RobloxTeam = {}
             for _, p in ipairs(players) do
-                partitions.RobloxTeam[p] = (p.Team and p.Team.Name) or "__nil"
+                if p.Team then
+                    partitions.RobloxTeam[p] = p.Team.Name
+                else
+                    partitions.RobloxTeam[p] = "__nil"
+                end
             end
         end
-    end, "DetectTeams")
+    end, "DetectRobloxTeams")
     
+    -- Método 2: TeamColor
+    partitions.TeamColor = {}
+    for _, p in ipairs(players) do
+        if p.TeamColor and p.TeamColor ~= BrickColor.new("White") then
+            partitions.TeamColor[p] = tostring(p.TeamColor)
+        else
+            partitions.TeamColor[p] = "__nil"
+        end
+    end
+    
+    -- Método 3: Attributes
     partitions.Attribute = {}
+    local attrNames = {"Team", "TeamName", "Faction", "Side", "Squad", "Group"}
     for _, p in ipairs(players) do
         local value = "__nil"
-        for _, attr in ipairs({"Team", "TeamName", "Faction", "Side"}) do
+        for _, attr in ipairs(attrNames) do
             local attrVal = p:GetAttribute(attr)
-            if attrVal then
+            if attrVal ~= nil then
                 value = tostring(attrVal)
                 break
             end
@@ -351,6 +410,7 @@ function SemanticEngine:DetectTeamSystemWithVoting()
         partitions.Attribute[p] = value
     end
     
+    -- Avalia cada método
     local bestMethod = nil
     local bestScore = 0
     local bestPartition = nil
@@ -364,41 +424,96 @@ function SemanticEngine:DetectTeamSystemWithVoting()
         end
     end
     
-    if bestMethod and bestScore > 10 then
+    if bestMethod and bestScore > 15 then
         self.TeamSystem.Method = bestMethod
         self.TeamSystem.CurrentPartition = bestPartition
         self.TeamSystem.ForceFFA = false
-        self.TeamSystem.AutoDetected = true
     else
-        self.TeamSystem.Method = "FFA_AutoDetected"
+        self.TeamSystem.Method = "FFA"
+        self.TeamSystem.CurrentPartition = {}
         self.TeamSystem.ForceFFA = true
-        self.TeamSystem.AutoDetected = true
     end
+    
+    self.TeamSystem.AutoDetected = true
+    self.TeamSystem.LastCheck = tick()
+end
+
+function SemanticEngine:ScorePartition(partition)
+    local groups = {}
+    local playerCount = 0
+    local nilCount = 0
+    
+    for player, key in pairs(partition) do
+        playerCount = playerCount + 1
+        if key == "__nil" then
+            nilCount = nilCount + 1
+        else
+            groups[key] = (groups[key] or 0) + 1
+        end
+    end
+    
+    local groupCount = 0
+    local maxSize = 0
+    local minSize = math.huge
+    
+    for _, count in pairs(groups) do
+        groupCount = groupCount + 1
+        maxSize = math.max(maxSize, count)
+        minSize = math.min(minSize, count)
+    end
+    
+    -- Precisa de 2-8 grupos
+    if groupCount < 2 or groupCount > 8 then
+        return 0
+    end
+    
+    -- Score baseado em balanceamento
+    local balance = minSize / math.max(maxSize, 1)
+    local coverage = (playerCount - nilCount) / math.max(playerCount, 1)
+    
+    return groupCount * balance * coverage * 100
 end
 
 function SemanticEngine:AutoDetectTeamSystem()
     local now = tick()
-    if now - self.TeamSystem.LastCheck < 5 then
+    if (now - self.TeamSystem.LastCheck) < self.TeamSystem.CheckInterval then
         return
     end
     
-    self.TeamSystem.LastCheck = now
     self:DetectTeamSystemWithVoting()
 end
 
 function SemanticEngine:GetPlayerTeam(player)
-    if not player or self.TeamSystem.ForceFFA then
+    if not player then return nil end
+    
+    if self.TeamSystem.ForceFFA then
         return nil
     end
     
+    -- Atualiza se necessário
+    if not self.TeamSystem.AutoDetected then
+        self:DetectTeamSystemWithVoting()
+    end
+    
     if self.TeamSystem.CurrentPartition then
-        return self.TeamSystem.CurrentPartition[player]
+        local team = self.TeamSystem.CurrentPartition[player]
+        if team and team ~= "__nil" then
+            return team
+        end
+    end
+    
+    -- Fallback: Team padrão
+    if player.Team then
+        return player.Team.Name
     end
     
     return nil
 end
 
 function SemanticEngine:AreSameTeam(player1, player2)
+    if not player1 or not player2 then return false end
+    if player1 == player2 then return true end
+    
     if self.TeamSystem.ForceFFA then
         return false
     end
@@ -407,6 +522,10 @@ function SemanticEngine:AreSameTeam(player1, player2)
     local team2 = self:GetPlayerTeam(player2)
     
     if not team1 or not team2 then
+        -- Fallback: Roblox Team
+        if player1.Team and player2.Team then
+            return player1.Team == player2.Team
+        end
         return false
     end
     
@@ -414,111 +533,76 @@ function SemanticEngine:AreSameTeam(player1, player2)
 end
 
 -- ============================================================================
--- TARGET FINDING
+-- CONTAINER SCANNING
 -- ============================================================================
-function SemanticEngine:FindRealTarget(player)
-    for entity, linkedPlayer in pairs(self.TargetDefinitions.EntityToPlayer) do
-        if entity and entity.Parent and linkedPlayer == player then
-            return entity
+function SemanticEngine:ScanForContainers()
+    local now = tick()
+    if (now - self.ContainerSystem.LastScan) < self.ContainerSystem.ScanInterval then
+        return
+    end
+    
+    self.ContainerSystem.LastScan = now
+    
+    local containerNames = {
+        "Characters", "Players", "Entities", "Alive", "InGame", 
+        "ActivePlayers", "NPCs", "Enemies", "Bots", "Units", 
+        "Team1", "Team2", "Arena", "Combatants", "Fighters",
+        "SpawnedPlayers", "GamePlayers", "AliveFolder",
+    }
+    
+    for _, name in ipairs(containerNames) do
+        SafeCall(function()
+            local container = Workspace:FindFirstChild(name, true)
+            if container and (container:IsA("Folder") or container:IsA("Model")) then
+                if not self.ContainerSystem.KnownContainers[container] then
+                    self.ContainerSystem.KnownContainers[container] = {
+                        name = name,
+                        found = now,
+                    }
+                    self.Stats.ContainersFound = self.Stats.ContainersFound + 1
+                end
+            end
+        end, "ScanContainer_" .. name)
+    end
+end
+
+-- ============================================================================
+-- REFRESH ALL PLAYERS (NOVO!)
+-- ============================================================================
+function SemanticEngine:RefreshAllPlayers()
+    -- Limpa caches antigos
+    PlayerCache:ClearAll()
+    
+    -- Re-track todos os jogadores
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            self:TrackPlayer(player)
         end
     end
     
-    if player.Character and player.Character.Parent then
-        return player.Character
-    end
+    -- Atualiza times
+    self:DetectTeamSystemWithVoting()
+end
+
+-- ============================================================================
+-- GET ALL VALID PLAYERS (HELPER PARA AIMBOT)
+-- ============================================================================
+function SemanticEngine:GetAllValidPlayers()
+    local validPlayers = {}
     
-    for container, _ in pairs(self.ContainerSystem.KnownContainers) do
-        if container and container.Parent then
-            local model = container:FindFirstChild(player.Name)
-            if model and model:IsA("Model") then
-                self.TargetDefinitions.EntityToPlayer[model] = player
-                return model
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local data = self:GetCachedPlayerData(player)
+            if data and data.isValid then
+                table.insert(validPlayers, {
+                    player = player,
+                    data = data,
+                })
             end
         end
     end
     
-    local possibleProxy = Workspace:FindFirstChild(player.Name)
-    if possibleProxy and possibleProxy:IsA("Model") then
-        self.TargetDefinitions.EntityToPlayer[possibleProxy] = player
-        return possibleProxy
-    end
-    
-    return nil
-end
-
-function SemanticEngine:GetPlayerFromModel(model)
-    if not model then return nil end
-    
-    if self.TargetDefinitions.EntityToPlayer[model] then
-        return self.TargetDefinitions.EntityToPlayer[model]
-    end
-    
-    for _, player in ipairs(Core.CachedPlayers) do
-        if player.Character == model then
-            self.TargetDefinitions.EntityToPlayer[model] = player
-            return player
-        end
-    end
-    
-    return nil
-end
-
-function SemanticEngine:FindRealHitbox(model)
-    if not model then return nil end
-    
-    for part, _ in pairs(self.TargetDefinitions.HitboxParts) do
-        if part and part:IsDescendantOf(model) then
-            return part
-        end
-    end
-    
-    return self:FindRootPart(model)
-end
-
-function SemanticEngine:FindRootPart(model)
-    if not model then return nil end
-    
-    local candidates = {
-        "HumanoidRootPart",
-        "Torso", 
-        "UpperTorso",
-        "Root",
-    }
-    
-    for _, name in ipairs(candidates) do
-        local part = model:FindFirstChild(name)
-        if part and part:IsA("BasePart") then
-            return part
-        end
-    end
-    
-    if model.PrimaryPart then
-        return model.PrimaryPart
-    end
-    
-    local humanoid = model:FindFirstChildOfClass("Humanoid")
-    if humanoid and humanoid.RootPart then
-        return humanoid.RootPart
-    end
-    
-    return nil
-end
-
-function SemanticEngine:GetPlayerAnchor(player, model)
-    model = model or self:FindRealTarget(player)
-    if not model then return nil end
-    
-    local hitbox = self:FindRealHitbox(model)
-    if hitbox and hitbox:IsA("BasePart") then
-        return hitbox
-    end
-    
-    local root = self:FindRootPart(model)
-    if root and root:IsA("BasePart") then
-        return root
-    end
-    
-    return nil
+    return validPlayers
 end
 
 -- ============================================================================
@@ -527,38 +611,119 @@ end
 function SemanticEngine:Initialize()
     if self._initialized then return end
     
-    SafeCall(function()
-        self:InitializeIncrementalScan()
-        self:StartContinuousLearning()
-        self:DetectTeamSystemWithVoting()
-        self:ScanForContainers()
+    -- Limpa estado anterior
+    PlayerCache:ClearAll()
+    self.TargetDefinitions.EntityToPlayer = {}
+    self.TargetDefinitions.PlayerToEntity = {}
+    
+    -- Scan inicial de containers
+    self:ScanForContainers()
+    
+    -- Detecta sistema de times
+    self:DetectTeamSystemWithVoting()
+    
+    -- Tracka todos os jogadores existentes
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            self:TrackPlayer(player)
+        end
+    end
+    
+    -- Conecta eventos de jogadores
+    local addedConn = Players.PlayerAdded:Connect(function(player)
+        task.wait(0.5) -- Aguarda jogador inicializar
+        self:TrackPlayer(player)
         
-        self._initialized = true
-        
-        -- Acelerar scan inicial
-        local originalObjectsPerTick = self.IncrementalScan.ObjectsPerTick
-        local originalTickInterval = self.IncrementalScan.TickInterval
-        
-        self.IncrementalScan.ObjectsPerTick = 200
-        self.IncrementalScan.TickInterval = 0.02
-        
-        task.delay(2, function()
-            self.IncrementalScan.ObjectsPerTick = originalObjectsPerTick
-            self.IncrementalScan.TickInterval = originalTickInterval
+        -- Re-avalia times
+        task.delay(1, function()
+            self:DetectTeamSystemWithVoting()
         end)
-    end, "SemanticEngine:Initialize")
+    end)
+    table.insert(self._connections, addedConn)
+    
+    local removingConn = Players.PlayerRemoving:Connect(function(player)
+        self:UntrackPlayer(player)
+    end)
+    table.insert(self._connections, removingConn)
+    
+    -- Loop de manutenção
+    task.spawn(function()
+        while true do
+            task.wait(2)
+            
+            SafeCall(function()
+                -- Verifica jogadores que podem ter Character agora
+                for _, player in ipairs(Players:GetPlayers()) do
+                    if player ~= LocalPlayer then
+                        local data = PlayerCache:Get(player)
+                        
+                        -- Se não tem dados válidos, tenta novamente
+                        if not data or not data.isValid then
+                            PlayerCache:Clear(player)
+                            local newData = self:BuildPlayerData(player)
+                            if newData.isValid then
+                                PlayerCache:Set(player, newData)
+                            end
+                        end
+                    end
+                end
+                
+                -- Scan de containers
+                self:ScanForContainers()
+                
+                -- Atualiza times
+                self:AutoDetectTeamSystem()
+            end, "MaintenanceLoop")
+        end
+    end)
+    
+    self._initialized = true
+    print("[Semantic] Inicializado - Tracking " .. #Players:GetPlayers() .. " jogadores")
 end
 
 -- ============================================================================
--- BACKGROUND LOOPS
+-- DEBUG
 -- ============================================================================
-task.spawn(function()
-    while wait(SemanticEngine.IncrementalScan.TickInterval) do
-        SafeCall(function()
-            SemanticEngine:ProcessIncrementalScan()
-        end, "IncrementalScanLoop")
+function SemanticEngine:Debug()
+    print("\n========== SEMANTIC ENGINE DEBUG ==========")
+    print("Initialized: " .. tostring(self._initialized))
+    
+    print("\n--- Team System ---")
+    print("  Method: " .. self.TeamSystem.Method)
+    print("  ForceFFA: " .. tostring(self.TeamSystem.ForceFFA))
+    print("  AutoDetected: " .. tostring(self.TeamSystem.AutoDetected))
+    
+    print("\n--- Containers ---")
+    local containerCount = 0
+    for container, info in pairs(self.ContainerSystem.KnownContainers) do
+        containerCount = containerCount + 1
+        print("  " .. info.name .. " (valid: " .. tostring(container.Parent ~= nil) .. ")")
     end
-end)
+    print("  Total: " .. containerCount)
+    
+    print("\n--- Player Mappings ---")
+    for player, entity in pairs(self.TargetDefinitions.PlayerToEntity) do
+        local valid = entity and entity.Parent ~= nil
+        print("  " .. player.Name .. " -> " .. (entity and entity.Name or "nil") .. " (valid: " .. tostring(valid) .. ")")
+    end
+    
+    print("\n--- Cached Player Data ---")
+    for player, data in pairs(PlayerCache.Data) do
+        print(string.format("  %s: valid=%s, anchor=%s, age=%.2fs",
+            player.Name,
+            tostring(data.isValid),
+            data.anchor and data.anchor.Name or "nil",
+            tick() - data.lastUpdate
+        ))
+    end
+    
+    print("\n--- Stats ---")
+    print("  Entities Learned: " .. self.Stats.EntitiesLearned)
+    print("  Containers Found: " .. self.Stats.ContainersFound)
+    print("  Players Tracked: " .. self.Stats.PlayersTracked)
+    
+    print("=============================================\n")
+end
 
 -- ============================================================================
 -- EXPORT

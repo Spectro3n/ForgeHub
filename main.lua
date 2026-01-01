@@ -305,6 +305,7 @@ task.spawn(function()
     end
 end)
 
+
 -- ============================================================================
 -- CLEANUP
 -- ============================================================================
@@ -325,6 +326,58 @@ local function Cleanup()
     
     Notify("ForgeHub", "Sistema descarregado")
 end
+
+-- ============================================================================
+-- SemanticEngine
+-- ============================================================================
+
+Players.PlayerAdded:Connect(function(player)
+    -- Atualiza cache geral
+    UpdatePlayerCache()
+    
+    -- Aguarda um pouco e força atualização
+    task.delay(1, function()
+        UpdatePlayerCache()
+        
+        -- Notifica SemanticEngine
+        if Core.SemanticEngine and Core.SemanticEngine.TrackPlayer then
+            Core.SemanticEngine:TrackPlayer(player)
+        end
+        
+        -- Cria ESP
+        if Core.ESP and Core.ESP.CreatePlayerESP then
+            Core.ESP:CreatePlayerESP(player)
+        end
+    end)
+    
+    -- Quando character carregar
+    player.CharacterAdded:Connect(function(character)
+        task.wait(0.2)
+        UpdatePlayerCache()
+        
+        if Core.SemanticEngine then
+            Core.SemanticEngine:ClearPlayerCache(player)
+        end
+        
+        if Core.ESP then
+            Core.ESP:RemovePlayerESP(player)
+            task.wait(0.1)
+            Core.ESP:CreatePlayerESP(player)
+        end
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    UpdatePlayerCache()
+    
+    if Core.SemanticEngine and Core.SemanticEngine.UntrackPlayer then
+        Core.SemanticEngine:UntrackPlayer(player)
+    end
+    
+    if Core.ESP and Core.ESP.RemovePlayerESP then
+        Core.ESP:RemovePlayerESP(player)
+    end
+end)
 
 -- Export cleanup
 _G.ForgeHubCleanup = Cleanup

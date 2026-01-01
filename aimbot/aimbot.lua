@@ -599,40 +599,97 @@ local function FindBestTarget()
     
     local candidates = {}
     
-    -- Coleta candidatos válidos
-    for _, player in ipairs(Players:GetPlayers()) do
+    -- USA Players:GetPlayers() DIRETAMENTE (não cache!)
+    local allPlayers = Players:GetPlayers()
+    
+    for _, player in ipairs(allPlayers) do
         if player == LocalPlayer then continue end
         
-        local data = GetPlayerData(player)
-        if not data or not data.isValid or not data.anchor then continue end
+        -- Obtém dados do jogador
+        local data = nil
+        
+        -- Tenta SemanticEngine primeiro
+        local SemanticEngine = Core.SemanticEngine
+        if SemanticEngine and SemanticEngine.GetCachedPlayerData then
+            data = SemanticEngine:GetCachedPlayerData(player)
+        end
+        
+        -- Fallback: dados diretos
+        if not data or not data.isValid then
+            local character = player.Character
+            if character then
+                local anchor = character:FindFirstChild("HumanoidRootPart")
+                            or character:FindFirstChild("Torso")
+                            or character:FindFirstChild("Head")
+                
+                if anchor and anchor:IsDescendantOf(workspace) then
+                    local humanoid = character:FindFirstChildOfClass("Humanoid")
+                    data = {
+                        isValid = true,
+                        model = character,
+                        anchor = anchor,
+                        humanoid = humanoid,
+                    }
+                end
+            end
+        end
+        
+        -- Valida dados
+        if not data or not data.isValid or not data.anchor then 
+            continue 
+        end
+        
+        -- Verifica se anchor está no workspace
+        if not data.anchor:IsDescendantOf(workspace) then
+            continue
+        end
         
         -- Verifica se está vivo
-        if data.humanoid and data.humanoid.Health <= 0 then continue end
+        if data.humanoid and data.humanoid.Health <= 0 then 
+            continue 
+        end
         
         -- Verifica team
-        if Settings.IgnoreTeamAimbot and AreSameTeam(LocalPlayer, player) then continue end
+        if Settings.IgnoreTeamAimbot then
+            local sameTeam = false
+            
+            if SemanticEngine and SemanticEngine.AreSameTeam then
+                sameTeam = SemanticEngine:AreSameTeam(LocalPlayer, player)
+            else
+                sameTeam = LocalPlayer.Team and player.Team and LocalPlayer.Team == player.Team
+            end
+            
+            if sameTeam then continue end
+        end
         
         -- Verifica distância 3D
         local distance = (data.anchor.Position - camPos).Magnitude
-        if distance > (Settings.MaxDistance or 800) then continue end
+        if distance > (Settings.MaxDistance or 800) then 
+            continue 
+        end
         
         -- Verifica se está na tela
         local screenPos, onScreen = Camera:WorldToViewportPoint(data.anchor.Position)
-        if not onScreen then continue end
+        if not onScreen then 
+            continue 
+        end
         
         -- Calcula distância ao mouse
         local distToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
         
         -- Verifica FOV
-        if Settings.UseAimbotFOV and distToMouse > (Settings.FOV or 180) then continue end
+        if Settings.UseAimbotFOV and distToMouse > (Settings.FOV or 180) then 
+            continue 
+        end
         
-        -- Verifica se está olhando na direção certa (evita 180°)
+        -- Verifica direção (evita mirar para trás)
         local dirToTarget = (data.anchor.Position - camPos).Unit
         local dot = camLook:Dot(dirToTarget)
-        if dot < 0.1 then continue end -- Menos de ~85° do centro
+        if dot < 0.1 then 
+            continue 
+        end
         
         -- Calcula score (menor = melhor)
-        -- Peso maior para distância ao mouse, menor para distância 3D
         local score = distToMouse * 1.0 + distance * 0.1
         
         table.insert(candidates, {
