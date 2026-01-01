@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB - AIMBOT MODULE v2.0 (ROBUST REWRITE)
+-- FORGEHUB - AIMBOT MODULE v3.0 (RAGE EDITION)
 -- ============================================================================
 
 local Core = _G.ForgeHubCore
@@ -18,6 +18,21 @@ local LocalPlayer = Core.LocalPlayer
 local Settings = Core.Settings
 local State = Core.State
 local Notify = Core.Notify
+
+-- ============================================================================
+-- RAGE SETTINGS (Adiciona ao Settings global)
+-- ============================================================================
+Settings.RageMode = Settings.RageMode or false
+Settings.UltraRageMode = Settings.UltraRageMode or false
+Settings.SilentAim = Settings.SilentAim or false
+Settings.AutoFire = Settings.AutoFire or false
+Settings.AutoSwitch = Settings.AutoSwitch or false
+Settings.TargetSwitchDelay = Settings.TargetSwitchDelay or 0.1
+Settings.MultiPartAim = Settings.MultiPartAim or false
+Settings.AimParts = Settings.AimParts or {"Head", "UpperTorso", "HumanoidRootPart"}
+Settings.IgnoreWalls = Settings.IgnoreWalls or false
+Settings.AntiAimDetection = Settings.AntiAimDetection or false
+Settings.ShakeReduction = Settings.ShakeReduction or 0
 
 -- Camera sempre atualizada
 local function GetCamera()
@@ -44,15 +59,12 @@ RayParams.FilterDescendantsInstances = {}
 
 local function UpdateRayParams()
     local filter = {GetCamera()}
-    
     if LocalPlayer.Character then
         table.insert(filter, LocalPlayer.Character)
     end
-    
     RayParams.FilterDescendantsInstances = filter
 end
 
--- Atualiza quando character muda
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.1)
     UpdateRayParams()
@@ -65,14 +77,12 @@ UpdateRayParams()
 local VisibilityCache = {
     Data = {},
     Frame = 0,
-    MaxAge = 3, -- frames
+    MaxAge = 2,
 }
 
 function VisibilityCache:NextFrame()
     self.Frame = self.Frame + 1
-    
-    -- Limpa cache antigo
-    if self.Frame % 10 == 0 then
+    if self.Frame % 5 == 0 then
         local toRemove = {}
         for key, data in pairs(self.Data) do
             if self.Frame - data.frame > self.MaxAge then
@@ -94,10 +104,7 @@ function VisibilityCache:Get(player)
 end
 
 function VisibilityCache:Set(player, visible)
-    self.Data[player] = {
-        visible = visible,
-        frame = self.Frame
-    }
+    self.Data[player] = {visible = visible, frame = self.Frame}
 end
 
 function VisibilityCache:Clear()
@@ -106,21 +113,17 @@ function VisibilityCache:Clear()
 end
 
 -- ============================================================================
--- PLAYER DATA HELPER (COM FALLBACK)
+-- PLAYER DATA HELPER
 -- ============================================================================
 local function GetPlayerData(player)
     if not player then return nil end
     
-    -- Tenta usar SemanticEngine
     local SemanticEngine = Core.SemanticEngine
     if SemanticEngine and SemanticEngine.GetCachedPlayerData then
         local data = SemanticEngine:GetCachedPlayerData(player)
-        if data and data.isValid then
-            return data
-        end
+        if data and data.isValid then return data end
     end
     
-    -- Fallback: obtém dados diretamente
     local character = player.Character
     if not character then return nil end
     
@@ -128,12 +131,9 @@ local function GetPlayerData(player)
                 or character:FindFirstChild("Torso")
                 or character:FindFirstChild("Head")
     
-    if not anchor or not anchor:IsDescendantOf(workspace) then
-        return nil
-    end
+    if not anchor or not anchor:IsDescendantOf(workspace) then return nil end
     
     local humanoid = character:FindFirstChildOfClass("Humanoid")
-    
     return {
         isValid = true,
         model = character,
@@ -143,37 +143,28 @@ local function GetPlayerData(player)
 end
 
 -- ============================================================================
--- TEAM CHECK (COM FALLBACK)
+-- TEAM CHECK
 -- ============================================================================
 local function AreSameTeam(player1, player2)
     if not player1 or not player2 then return false end
     
-    -- Tenta usar SemanticEngine
     local SemanticEngine = Core.SemanticEngine
     if SemanticEngine and SemanticEngine.AreSameTeam then
         local success, result = pcall(function()
             return SemanticEngine:AreSameTeam(player1, player2)
         end)
-        if success then
-            return result
-        end
+        if success then return result end
     end
     
-    -- Fallback: verifica Team padrão
     if player1.Team and player2.Team then
         return player1.Team == player2.Team
-    end
-    
-    -- Fallback 2: TeamColor
-    if player1.TeamColor and player2.TeamColor then
-        return player1.TeamColor == player2.TeamColor
     end
     
     return false
 end
 
 -- ============================================================================
--- GET AIM PART
+-- GET AIM PART (RAGE VERSION - MULTIPLE PARTS)
 -- ============================================================================
 local function GetAimPart(player, partName)
     local data = GetPlayerData(player)
@@ -182,31 +173,95 @@ local function GetAimPart(player, partName)
     local model = data.model
     partName = partName or "Head"
     
-    -- Normaliza nome
     if type(partName) == "table" then
         partName = partName[1] or "Head"
     end
     
-    if partName == "Head" then
-        return model:FindFirstChild("Head") or data.anchor
-        
-    elseif partName == "Torso" then
-        return model:FindFirstChild("UpperTorso")
-            or model:FindFirstChild("Torso")
-            or data.anchor
-            
-    elseif partName == "Root" or partName == "HumanoidRootPart" then
-        return data.anchor
+    local partMap = {
+        Head = {"Head"},
+        Torso = {"UpperTorso", "Torso"},
+        Root = {"HumanoidRootPart"},
+        HumanoidRootPart = {"HumanoidRootPart"},
+        UpperTorso = {"UpperTorso", "Torso"},
+        LowerTorso = {"LowerTorso", "Torso"},
+        LeftArm = {"LeftUpperArm", "Left Arm"},
+        RightArm = {"RightUpperArm", "Right Arm"},
+        LeftLeg = {"LeftUpperLeg", "Left Leg"},
+        RightLeg = {"RightUpperLeg", "Right Leg"},
+    }
+    
+    local candidates = partMap[partName] or {partName}
+    
+    for _, name in ipairs(candidates) do
+        local part = model:FindFirstChild(name, true)
+        if part and part:IsA("BasePart") then
+            return part
+        end
     end
     
     return data.anchor
 end
 
+-- Multi-part aim: retorna a melhor parte visível
+local function GetBestAimPart(player)
+    local data = GetPlayerData(player)
+    if not data or not data.model then return nil end
+    
+    if not Settings.MultiPartAim then
+        return GetAimPart(player, Settings.AimPart)
+    end
+    
+    local Camera = GetCamera()
+    local camPos = Camera.CFrame.Position
+    local mousePos = UserInputService:GetMouseLocation()
+    
+    local bestPart = nil
+    local bestScore = math.huge
+    
+    local partsToCheck = Settings.AimParts or {"Head", "UpperTorso", "HumanoidRootPart"}
+    
+    for _, partName in ipairs(partsToCheck) do
+        local part = GetAimPart(player, partName)
+        if part then
+            local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+            if onScreen then
+                local distToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                
+                -- Prioriza cabeça
+                local priority = 1
+                if partName == "Head" then priority = 0.7 end
+                
+                local score = distToMouse * priority
+                
+                if score < bestScore then
+                    -- Verifica visibilidade se não estiver em rage mode
+                    local visible = true
+                    if not Settings.IgnoreWalls then
+                        UpdateRayParams()
+                        local direction = part.Position - camPos
+                        local ray = Workspace:Raycast(camPos, direction, RayParams)
+                        if ray and ray.Instance and not ray.Instance:IsDescendantOf(data.model) then
+                            visible = false
+                        end
+                    end
+                    
+                    if visible then
+                        bestScore = score
+                        bestPart = part
+                    end
+                end
+            end
+        end
+    end
+    
+    return bestPart or GetAimPart(player, Settings.AimPart)
+end
+
 -- ============================================================================
--- PREDICTION SYSTEM
+-- RAGE PREDICTION SYSTEM
 -- ============================================================================
 local PredictionHistory = {}
-local MAX_HISTORY = 5
+local MAX_HISTORY = 8
 
 local function UpdatePredictionHistory(player, position)
     if not PredictionHistory[player] then
@@ -214,42 +269,31 @@ local function UpdatePredictionHistory(player, position)
     end
     
     local history = PredictionHistory[player]
-    table.insert(history, {
-        position = position,
-        time = tick()
-    })
+    table.insert(history, {position = position, time = tick()})
     
-    -- Mantém apenas últimos N registros
     while #history > MAX_HISTORY do
         table.remove(history, 1)
     end
 end
 
 local function CalculateVelocity(player, anchor)
-    -- Método 1: AssemblyLinearVelocity
     if anchor.AssemblyLinearVelocity then
         local vel = anchor.AssemblyLinearVelocity
-        if vel.Magnitude > 0.1 then
-            return vel
-        end
+        if vel.Magnitude > 0.1 then return vel end
     end
     
-    -- Método 2: Velocity (deprecated mas funciona)
     if anchor.Velocity then
         local vel = anchor.Velocity
-        if vel.Magnitude > 0.1 then
-            return vel
-        end
+        if vel.Magnitude > 0.1 then return vel end
     end
     
-    -- Método 3: Histórico de posições
     local history = PredictionHistory[player]
     if history and #history >= 2 then
         local newest = history[#history]
         local oldest = history[1]
         local deltaTime = newest.time - oldest.time
         
-        if deltaTime > 0.05 then
+        if deltaTime > 0.03 then
             local deltaPos = newest.position - oldest.position
             return deltaPos / deltaTime
         end
@@ -270,39 +314,53 @@ local function PredictPosition(player, targetPart)
     
     local velocity = CalculateVelocity(player, data.anchor)
     
-    -- Reduz velocidade Y (pulos)
-    if velocity.Y > 0 then
-        velocity = Vector3.new(velocity.X, velocity.Y * 0.3, velocity.Z)
+    -- Em Rage mode, predição mais agressiva
+    local yMultiplier = 0.3
+    if Settings.RageMode or Settings.UltraRageMode then
+        yMultiplier = 0.5
     end
     
-    -- Calcula tempo até o alvo
+    if velocity.Y > 0 then
+        velocity = Vector3.new(velocity.X, velocity.Y * yMultiplier, velocity.Z)
+    end
+    
     local Camera = GetCamera()
     local distance = (targetPart.Position - Camera.CFrame.Position).Magnitude
-    local timeToTarget = math.clamp(distance / 800, 0.01, 0.2)
     
-    -- Aplica predição
+    -- Tempo de resposta mais rápido em Rage
+    local timeDiv = Settings.UltraRageMode and 600 or (Settings.RageMode and 700 or 800)
+    local timeToTarget = math.clamp(distance / timeDiv, 0.01, 0.25)
+    
+    -- Multiplicador de predição mais alto em Rage
     local multiplier = Settings.PredictionMultiplier or 0.135
+    if Settings.UltraRageMode then
+        multiplier = multiplier * 1.5
+    elseif Settings.RageMode then
+        multiplier = multiplier * 1.2
+    end
+    
     local predictedPos = targetPart.Position + (velocity * multiplier * timeToTarget)
     
-    -- Atualiza histórico
     UpdatePredictionHistory(player, data.anchor.Position)
     
     return predictedPos
 end
 
 -- ============================================================================
--- VISIBILITY CHECK
+-- VISIBILITY CHECK (RAGE CAN IGNORE)
 -- ============================================================================
 local function IsVisible(player, targetPart)
+    -- Rage modes podem ignorar paredes
+    if Settings.IgnoreWalls then
+        return true
+    end
+    
     if not Settings.VisibleCheck then
         return true
     end
     
-    -- Verifica cache
     local cached, hit = VisibilityCache:Get(player)
-    if hit then
-        return cached
-    end
+    if hit then return cached end
     
     local Camera = GetCamera()
     local data = GetPlayerData(player)
@@ -311,14 +369,12 @@ local function IsVisible(player, targetPart)
     local origin = Camera.CFrame.Position
     local direction = targetPart.Position - origin
     
-    -- Atualiza filtro
     UpdateRayParams()
     
     local ray = Workspace:Raycast(origin, direction, RayParams)
     
     local visible = true
     if ray and ray.Instance then
-        -- Verifica se bateu no personagem do alvo
         if not ray.Instance:IsDescendantOf(data.model) then
             visible = false
         end
@@ -329,17 +385,19 @@ local function IsVisible(player, targetPart)
 end
 
 -- ============================================================================
--- TARGET LOCK SYSTEM (REWRITTEN)
+-- RAGE TARGET LOCK SYSTEM
 -- ============================================================================
 local TargetLock = {
     CurrentTarget = nil,
     LockTime = 0,
     LastScore = math.huge,
+    LastKill = 0,
+    KillCount = 0,
     
-    -- Configurações
-    MinLockDuration = 0.15,
-    MaxLockDuration = 2.0,
-    ImprovementThreshold = 0.7,
+    -- Rage settings
+    MinLockDuration = 0.1,
+    MaxLockDuration = 1.5,
+    ImprovementThreshold = 0.6,
 }
 
 function TargetLock:Reset()
@@ -354,23 +412,27 @@ function TargetLock:IsValid()
     local data = GetPlayerData(self.CurrentTarget)
     if not data or not data.isValid then return false end
     
-    -- Verifica se está vivo
     if data.humanoid and data.humanoid.Health <= 0 then
+        self.KillCount = self.KillCount + 1
+        self.LastKill = tick()
         return false
     end
     
-    -- Verifica distância
     local Camera = GetCamera()
     local distance = (data.anchor.Position - Camera.CFrame.Position).Magnitude
-    if distance > (Settings.MaxDistance or 800) then
-        return false
+    
+    -- Em Ultra Rage, distância máxima é muito maior
+    local maxDist = Settings.MaxDistance or 800
+    if Settings.UltraRageMode then
+        maxDist = maxDist * 2
+    elseif Settings.RageMode then
+        maxDist = maxDist * 1.5
     end
     
-    -- Verifica se ainda está na tela
+    if distance > maxDist then return false end
+    
     local screenPos, onScreen = Camera:WorldToViewportPoint(data.anchor.Position)
-    if not onScreen then
-        return false
-    end
+    if not onScreen then return false end
     
     return true
 end
@@ -380,7 +442,21 @@ function TargetLock:TryLock(candidate, score)
     
     local now = tick()
     
-    -- Se não tem alvo, trava imediatamente
+    -- Auto Switch: troca mais rapidamente
+    if Settings.AutoSwitch then
+        self.MaxLockDuration = Settings.TargetSwitchDelay or 0.3
+        self.ImprovementThreshold = 0.5
+    elseif Settings.UltraRageMode then
+        self.MaxLockDuration = 0.5
+        self.ImprovementThreshold = 0.4
+    elseif Settings.RageMode then
+        self.MaxLockDuration = 0.8
+        self.ImprovementThreshold = 0.5
+    else
+        self.MaxLockDuration = 1.5
+        self.ImprovementThreshold = 0.7
+    end
+    
     if not self.CurrentTarget then
         self.CurrentTarget = candidate
         self.LockTime = now
@@ -388,13 +464,11 @@ function TargetLock:TryLock(candidate, score)
         return
     end
     
-    -- Se é o mesmo alvo, atualiza
     if self.CurrentTarget == candidate then
         self.LastScore = score
         return
     end
     
-    -- Verifica se alvo atual ainda é válido
     if not self:IsValid() then
         self.CurrentTarget = candidate
         self.LockTime = now
@@ -402,20 +476,16 @@ function TargetLock:TryLock(candidate, score)
         return
     end
     
-    -- Verifica tempo de lock
     local lockDuration = now - self.LockTime
     
-    -- Se passou do tempo máximo, permite trocar
-    if lockDuration > (Settings.MaxLockTime or self.MaxLockDuration) then
+    if lockDuration > self.MaxLockDuration then
         self.CurrentTarget = candidate
         self.LockTime = now
         self.LastScore = score
         return
     end
     
-    -- Se novo alvo é significativamente melhor, troca
-    local threshold = Settings.LockImprovementThreshold or self.ImprovementThreshold
-    if score < self.LastScore * threshold then
+    if score < self.LastScore * self.ImprovementThreshold then
         self.CurrentTarget = candidate
         self.LockTime = now
         self.LastScore = score
@@ -426,20 +496,21 @@ function TargetLock:GetTarget()
     if self:IsValid() then
         return self.CurrentTarget
     end
-    
     self:Reset()
     return nil
 end
 
 -- ============================================================================
--- AIM METHODS
+-- RAGE AIM CONTROLLER
 -- ============================================================================
 local AimController = {
     IsAiming = false,
     OriginalCFrame = nil,
-    
-    -- Detecção de métodos
     HasMouseMoveRel = false,
+    
+    -- Shake reduction
+    LastAimPos = nil,
+    AimHistory = {},
 }
 
 function AimController:DetectMethods()
@@ -448,35 +519,46 @@ end
 
 function AimController:StartAiming()
     if self.IsAiming then return end
-    
     self.IsAiming = true
     self.OriginalCFrame = GetCamera().CFrame
 end
 
 function AimController:StopAiming()
     if not self.IsAiming then return end
-    
     self.IsAiming = false
     self.OriginalCFrame = nil
+    self.LastAimPos = nil
+    self.AimHistory = {}
     
-    -- Restaura camera subject
     pcall(function()
         local Camera = GetCamera()
         if LocalPlayer.Character then
             local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-            if hum then
-                Camera.CameraSubject = hum
-            end
+            if hum then Camera.CameraSubject = hum end
         end
     end)
 end
 
 function AimController:CalculateSmoothFactor(smoothing)
+    -- ULTRA RAGE: Sem suavização
+    if Settings.UltraRageMode then
+        return 1.0
+    end
+    
+    -- RAGE MODE: Suavização mínima
+    if Settings.RageMode then
+        if not smoothing or smoothing <= 2 then
+            return 1.0
+        else
+            return math.clamp(0.95 - (smoothing * 0.03), 0.5, 0.95)
+        end
+    end
+    
+    -- NORMAL: Suavização completa
     if not smoothing or smoothing <= 0 then
         return 1.0
     end
     
-    -- Mapeamento mais suave
     if smoothing <= 1 then
         return 0.9
     elseif smoothing <= 3 then
@@ -492,17 +574,42 @@ function AimController:CalculateSmoothFactor(smoothing)
     end
 end
 
+-- Shake reduction: suaviza micro-movimentos
+function AimController:ApplyShakeReduction(targetPos)
+    if Settings.ShakeReduction <= 0 then
+        return targetPos
+    end
+    
+    table.insert(self.AimHistory, targetPos)
+    while #self.AimHistory > Settings.ShakeReduction do
+        table.remove(self.AimHistory, 1)
+    end
+    
+    if #self.AimHistory < 2 then
+        return targetPos
+    end
+    
+    local avgPos = Vector3.zero
+    for _, pos in ipairs(self.AimHistory) do
+        avgPos = avgPos + pos
+    end
+    return avgPos / #self.AimHistory
+end
+
 function AimController:ApplyAim(targetPosition, smoothing)
     if not targetPosition then return false end
     
     local Camera = GetCamera()
     if not Camera then return false end
     
+    -- Aplica shake reduction
+    targetPosition = self:ApplyShakeReduction(targetPosition)
+    
     local method = Settings.AimMethod or "Camera"
     local smoothFactor = self:CalculateSmoothFactor(smoothing)
     
-    -- Deadzone check
-    if Settings.UseDeadzone then
+    -- Deadzone (desativado em rage modes)
+    if Settings.UseDeadzone and not Settings.RageMode and not Settings.UltraRageMode then
         local screenPos, onScreen = Camera:WorldToViewportPoint(targetPosition)
         if onScreen then
             local mousePos = UserInputService:GetMouseLocation()
@@ -510,7 +617,7 @@ function AimController:ApplyAim(targetPosition, smoothing)
             
             local deadzone = Settings.DeadzoneRadius or 2
             if dist < deadzone then
-                return true -- Já está no alvo
+                return true
             end
         end
     end
@@ -538,10 +645,10 @@ function AimController:Method_Camera(targetPosition, smoothFactor)
         
         local targetCFrame = CFrame.lookAt(camPos, targetPosition)
         
-        if smoothFactor >= 0.95 then
+        -- Em Ultra Rage, snap instantâneo
+        if Settings.UltraRageMode or smoothFactor >= 0.98 then
             Camera.CFrame = targetCFrame
         else
-            -- Interpolação suave
             local currentRotation = Camera.CFrame.Rotation
             local targetRotation = targetCFrame.Rotation
             local smoothedRotation = currentRotation:Lerp(targetRotation, smoothFactor)
@@ -570,12 +677,17 @@ function AimController:Method_MouseMoveRel(targetPosition, smoothFactor)
         local deltaX = screenPos.X - centerX
         local deltaY = screenPos.Y - centerY
         
-        -- Aplica suavização
-        local moveX = deltaX * smoothFactor
-        local moveY = deltaY * smoothFactor
+        -- Em Ultra Rage, movimento instantâneo
+        local moveX, moveY
+        if Settings.UltraRageMode then
+            moveX = deltaX
+            moveY = deltaY
+        else
+            moveX = deltaX * smoothFactor
+            moveY = deltaY * smoothFactor
+        end
         
-        -- Ignora movimentos muito pequenos
-        if math.abs(moveX) < 0.5 and math.abs(moveY) < 0.5 then
+        if math.abs(moveX) < 0.2 and math.abs(moveY) < 0.2 then
             return
         end
         
@@ -586,7 +698,79 @@ function AimController:Method_MouseMoveRel(targetPosition, smoothFactor)
 end
 
 -- ============================================================================
--- TARGET FINDER
+-- SILENT AIM (Se suportado pelo executor)
+-- ============================================================================
+local SilentAim = {
+    Enabled = false,
+    OriginalMouse = nil,
+    HookedNamecall = false,
+}
+
+function SilentAim:GetTargetPosition()
+    local target = TargetLock:GetTarget()
+    if not target then return nil end
+    
+    local aimPart = GetBestAimPart(target)
+    if not aimPart then return nil end
+    
+    return PredictPosition(target, aimPart)
+end
+
+function SilentAim:Initialize()
+    if self.HookedNamecall then return end
+    
+    -- Tenta hook via metatable (pode não funcionar em todos os executores)
+    SafeCall(function()
+        if type(getrawmetatable) ~= "function" then return end
+        if type(hookfunction) ~= "function" and type(hookmetamethod) ~= "function" then return end
+        
+        local mt = getrawmetatable(game)
+        if not mt then return end
+        
+        local oldNamecall = mt.__namecall
+        
+        local hookFunc = function(self, ...)
+            local method = getnamecallmethod()
+            
+            if SilentAim.Enabled and Settings.SilentAim then
+                -- Hook para métodos de raycast/mouse
+                if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" then
+                    local targetPos = SilentAim:GetTargetPosition()
+                    if targetPos then
+                        -- Modifica o ray para apontar para o alvo
+                        local args = {...}
+                        local origin = typeof(args[1]) == "Ray" and args[1].Origin or args[1]
+                        if origin then
+                            local newRay = Ray.new(origin, (targetPos - origin).Unit * 1000)
+                            args[1] = newRay
+                            return oldNamecall(self, unpack(args))
+                        end
+                    end
+                end
+            end
+            
+            return oldNamecall(self, ...)
+        end
+        
+        if type(hookmetamethod) == "function" then
+            hookmetamethod(game, "__namecall", hookFunc)
+        end
+        
+        self.HookedNamecall = true
+    end, "SilentAim:Initialize")
+end
+
+function SilentAim:Enable()
+    self.Enabled = true
+    self:Initialize()
+end
+
+function SilentAim:Disable()
+    self.Enabled = false
+end
+
+-- ============================================================================
+-- RAGE TARGET FINDER
 -- ============================================================================
 local function FindBestTarget()
     local Camera = GetCamera()
@@ -594,27 +778,35 @@ local function FindBestTarget()
     local camLook = Camera.CFrame.LookVector
     local mousePos = UserInputService:GetMouseLocation()
     
-    local bestTarget = nil
-    local bestScore = math.huge
-    
     local candidates = {}
-    
-    -- USA Players:GetPlayers() DIRETAMENTE (não cache!)
     local allPlayers = Players:GetPlayers()
+    
+    -- FOV ajustado para Rage
+    local currentFOV = Settings.FOV or 180
+    if Settings.UltraRageMode then
+        currentFOV = 9999 -- FOV infinito
+    elseif Settings.RageMode then
+        currentFOV = currentFOV * 2
+    end
+    
+    -- Distância ajustada para Rage
+    local maxDist = Settings.MaxDistance or 800
+    if Settings.UltraRageMode then
+        maxDist = maxDist * 3
+    elseif Settings.RageMode then
+        maxDist = maxDist * 1.5
+    end
     
     for _, player in ipairs(allPlayers) do
         if player == LocalPlayer then continue end
         
-        -- Obtém dados do jogador
         local data = nil
         
-        -- Tenta SemanticEngine primeiro
         local SemanticEngine = Core.SemanticEngine
         if SemanticEngine and SemanticEngine.GetCachedPlayerData then
             data = SemanticEngine:GetCachedPlayerData(player)
         end
         
-        -- Fallback: dados diretos
         if not data or not data.isValid then
             local character = player.Character
             if character then
@@ -634,63 +826,55 @@ local function FindBestTarget()
             end
         end
         
-        -- Valida dados
-        if not data or not data.isValid or not data.anchor then 
-            continue 
-        end
+        if not data or not data.isValid or not data.anchor then continue end
+        if not data.anchor:IsDescendantOf(workspace) then continue end
+        if data.humanoid and data.humanoid.Health <= 0 then continue end
         
-        -- Verifica se anchor está no workspace
-        if not data.anchor:IsDescendantOf(workspace) then
-            continue
-        end
-        
-        -- Verifica se está vivo
-        if data.humanoid and data.humanoid.Health <= 0 then 
-            continue 
-        end
-        
-        -- Verifica team
         if Settings.IgnoreTeamAimbot then
             local sameTeam = false
-            
             if SemanticEngine and SemanticEngine.AreSameTeam then
                 sameTeam = SemanticEngine:AreSameTeam(LocalPlayer, player)
             else
                 sameTeam = LocalPlayer.Team and player.Team and LocalPlayer.Team == player.Team
             end
-            
             if sameTeam then continue end
         end
         
-        -- Verifica distância 3D
         local distance = (data.anchor.Position - camPos).Magnitude
-        if distance > (Settings.MaxDistance or 800) then 
-            continue 
-        end
+        if distance > maxDist then continue end
         
-        -- Verifica se está na tela
         local screenPos, onScreen = Camera:WorldToViewportPoint(data.anchor.Position)
-        if not onScreen then 
-            continue 
-        end
         
-        -- Calcula distância ao mouse
-        local distToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+        -- Em Ultra Rage, ignora se está na tela
+        if not Settings.UltraRageMode and not onScreen then continue end
         
-        -- Verifica FOV
-        if Settings.UseAimbotFOV and distToMouse > (Settings.FOV or 180) then 
-            continue 
-        end
+        local distToMouse = onScreen and (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude or 9999
         
-        -- Verifica direção (evita mirar para trás)
+        if Settings.UseAimbotFOV and distToMouse > currentFOV then continue end
+        
+        -- Verifica direção (menos restritivo em Rage)
         local dirToTarget = (data.anchor.Position - camPos).Unit
         local dot = camLook:Dot(dirToTarget)
-        if dot < 0.1 then 
-            continue 
+        local minDot = Settings.UltraRageMode and -0.5 or (Settings.RageMode and 0 or 0.1)
+        if dot < minDot then continue end
+        
+        -- Score: em Rage, prioriza distância 3D; em Normal, prioriza mouse
+        local score
+        if Settings.UltraRageMode then
+            score = distance * 0.5 + distToMouse * 0.1
+        elseif Settings.RageMode then
+            score = distance * 0.3 + distToMouse * 0.5
+        else
+            score = distToMouse * 1.0 + distance * 0.1
         end
         
-        -- Calcula score (menor = melhor)
-        local score = distToMouse * 1.0 + distance * 0.1
+        -- Prioriza alvos com menos vida em Rage
+        if Settings.RageMode or Settings.UltraRageMode then
+            if data.humanoid then
+                local healthPercent = data.humanoid.Health / data.humanoid.MaxHealth
+                score = score * (0.5 + healthPercent * 0.5)
+            end
+        end
         
         table.insert(candidates, {
             player = player,
@@ -701,35 +885,65 @@ local function FindBestTarget()
         })
     end
     
-    -- Ordena por score
-    table.sort(candidates, function(a, b)
-        return a.score < b.score
-    end)
+    table.sort(candidates, function(a, b) return a.score < b.score end)
     
-    -- Verifica visibilidade dos melhores candidatos
-    local maxChecks = 5
+    -- Verifica visibilidade (menos checks em Rage)
+    local maxChecks = Settings.UltraRageMode and 1 or (Settings.RageMode and 3 or 5)
     local checked = 0
     
     for _, candidate in ipairs(candidates) do
         if checked >= maxChecks then break end
         
-        local aimPart = GetAimPart(candidate.player, Settings.AimPart)
+        local aimPart = GetBestAimPart(candidate.player)
         if not aimPart then continue end
         
         checked = checked + 1
         
-        -- Verifica visibilidade
+        -- Em Rage modes, pode ignorar visibilidade
+        if Settings.IgnoreWalls or not Settings.VisibleCheck then
+            return candidate.player, candidate.score
+        end
+        
         if IsVisible(candidate.player, aimPart) then
             return candidate.player, candidate.score
         end
     end
     
-    -- Se nenhum visível, retorna o melhor sem check (se visiblecheck desativado)
-    if not Settings.VisibleCheck and #candidates > 0 then
+    -- Fallback
+    if (Settings.IgnoreWalls or not Settings.VisibleCheck) and #candidates > 0 then
         return candidates[1].player, candidates[1].score
     end
     
     return nil, math.huge
+end
+
+-- ============================================================================
+-- AUTO FIRE (Clique automático)
+-- ============================================================================
+local AutoFire = {
+    LastFire = 0,
+    FireRate = 0.1,
+}
+
+function AutoFire:TryFire()
+    if not Settings.AutoFire then return end
+    
+    local now = tick()
+    if now - self.LastFire < self.FireRate then return end
+    
+    local target = TargetLock:GetTarget()
+    if not target then return end
+    
+    -- Simula clique
+    SafeCall(function()
+        if mouse1click then
+            mouse1click()
+            self.LastFire = now
+        elseif type(Input) == "table" and Input.MouseButton1Click then
+            Input.MouseButton1Click()
+            self.LastFire = now
+        end
+    end, "AutoFire")
 end
 
 -- ============================================================================
@@ -749,13 +963,13 @@ function AimbotState:Reset()
     AimController:StopAiming()
     VisibilityCache:Clear()
     PredictionHistory = {}
+    SilentAim:Disable()
 end
 
 function AimbotState:OnError()
     self.ErrorCount = self.ErrorCount + 1
-    
     if self.ErrorCount >= self.MaxErrors then
-        warn("[Aimbot] Muitos erros, resetando estado...")
+        warn("[Aimbot] Muitos erros, resetando...")
         self:Reset()
         self.ErrorCount = 0
     end
@@ -770,69 +984,73 @@ local Aimbot = {
 }
 
 function Aimbot:Update()
-    -- Atualiza cache de visibilidade
     VisibilityCache:NextFrame()
     
-    -- Verifica se deve estar ativo
     local shouldBeActive = Settings.AimbotActive and State.MouseHold
     
-    -- Se estado mudou para inativo
     if not shouldBeActive then
         if AimbotState.Active then
             AimbotState.Active = false
             TargetLock:Reset()
             AimController:StopAiming()
+            SilentAim:Disable()
         end
         return
     end
     
     AimbotState.Active = true
     
-    -- Verifica alvo atual
-    local currentTarget = TargetLock:GetTarget()
+    -- Silent Aim
+    if Settings.SilentAim then
+        SilentAim:Enable()
+    end
     
-    -- Busca novo/melhor alvo
+    -- Busca alvo
     local bestTarget, bestScore = FindBestTarget()
     
     if bestTarget then
         TargetLock:TryLock(bestTarget, bestScore)
     end
     
-    -- Obtém alvo final (pode ser o mesmo ou novo)
     local target = TargetLock:GetTarget()
     
     if target then
-        local aimPart = GetAimPart(target, Settings.AimPart)
+        local aimPart = GetBestAimPart(target)
         
         if aimPart then
-            -- Calcula posição predita
             local aimPos = PredictPosition(target, aimPart)
             
-            -- Calcula suavização adaptativa
             local data = GetPlayerData(target)
             local baseSm = Settings.SmoothingFactor or 5
             local smoothing = baseSm
             
-            if Settings.UseAdaptiveSmoothing and data and data.anchor then
+            -- Rage modes: suavização mínima ou zero
+            if Settings.UltraRageMode then
+                smoothing = 0
+            elseif Settings.RageMode then
+                smoothing = math.min(baseSm, 2)
+            elseif Settings.UseAdaptiveSmoothing and data and data.anchor then
                 local Camera = GetCamera()
                 local dist = (data.anchor.Position - Camera.CFrame.Position).Magnitude
                 
                 if dist < 50 then
-                    smoothing = baseSm * 1.3 -- Mais suave de perto
+                    smoothing = baseSm * 1.3
                 elseif dist > 300 then
-                    smoothing = baseSm * 0.7 -- Mais rápido de longe
+                    smoothing = baseSm * 0.7
                 end
             end
             
-            -- Aplica aim
             AimController:ApplyAim(aimPos, smoothing)
+            
+            -- Auto Fire
+            if Settings.AutoFire then
+                AutoFire:TryFire()
+            end
         else
-            -- Não conseguiu obter parte, reseta
             TargetLock:Reset()
             AimController:StopAiming()
         end
     else
-        -- Sem alvo, para de mirar
         AimController:StopAiming()
     end
 end
@@ -843,7 +1061,12 @@ function Aimbot:StartLoop()
         self.Connection = nil
     end
     
-    self.Connection = RunService.Heartbeat:Connect(function()
+    -- Em Rage mode, usa RenderStepped para resposta mais rápida
+    local event = (Settings.RageMode or Settings.UltraRageMode) 
+                  and RunService.RenderStepped 
+                  or RunService.Heartbeat
+    
+    self.Connection = event:Connect(function()
         local success = SafeCall(function()
             self:Update()
         end, "AimbotUpdate")
@@ -859,32 +1082,61 @@ function Aimbot:StopLoop()
         self.Connection:Disconnect()
         self.Connection = nil
     end
-    
     AimbotState:Reset()
 end
 
 function Aimbot:Toggle(enabled)
     Settings.AimbotActive = enabled
-    
     if not enabled then
         AimbotState:Reset()
+    end
+end
+
+function Aimbot:SetRageMode(enabled)
+    Settings.RageMode = enabled
+    if enabled then
+        Settings.UltraRageMode = false
+    end
+    
+    -- Reinicia loop com novo evento
+    if self.Initialized then
+        self:StopLoop()
+        self:StartLoop()
+    end
+    
+    if Notify then
+        Notify("Aimbot", "Rage Mode " .. (enabled and "ATIVADO 🔥" or "DESATIVADO"))
+    end
+end
+
+function Aimbot:SetUltraRageMode(enabled)
+    Settings.UltraRageMode = enabled
+    if enabled then
+        Settings.RageMode = true
+    end
+    
+    -- Reinicia loop com novo evento
+    if self.Initialized then
+        self:StopLoop()
+        self:StartLoop()
+    end
+    
+    if Notify then
+        Notify("Aimbot", "ULTRA RAGE " .. (enabled and "ATIVADO ⚡🔥⚡" or "DESATIVADO"))
     end
 end
 
 function Aimbot:Initialize()
     if self.Initialized then return end
     
-    -- Detecta métodos disponíveis
     AimController:DetectMethods()
-    
-    -- Inicia loop
+    SilentAim:Initialize()
     self:StartLoop()
     
-    -- Watchdog: reinicia loop se morrer
+    -- Watchdog
     task.spawn(function()
         while true do
             task.wait(2)
-            
             if self.Initialized and not self.Connection then
                 warn("[Aimbot] Loop morreu, reiniciando...")
                 self:StartLoop()
@@ -894,67 +1146,43 @@ function Aimbot:Initialize()
     
     self.Initialized = true
     
-    print("[Aimbot] Inicializado com sucesso!")
-    print("[Aimbot] MouseMoveRel: " .. (AimController.HasMouseMoveRel and "Disponível" or "Não disponível"))
+    print("[Aimbot] Inicializado - RAGE EDITION!")
+    print("[Aimbot] MouseMoveRel: " .. (AimController.HasMouseMoveRel and "OK" or "N/A"))
+    print("[Aimbot] SilentAim: " .. (SilentAim.HookedNamecall and "OK" or "N/A"))
 end
 
 function Aimbot:Debug()
-    print("\n========== AIMBOT DEBUG ==========")
+    print("\n========== AIMBOT RAGE DEBUG ==========")
     print("Initialized: " .. tostring(self.Initialized))
-    print("Connection alive: " .. tostring(self.Connection ~= nil))
-    print("State.Active: " .. tostring(AimbotState.Active))
-    print("State.ErrorCount: " .. tostring(AimbotState.ErrorCount))
+    print("Connection: " .. tostring(self.Connection ~= nil))
     
-    print("\n--- Settings ---")
-    print("  AimbotActive: " .. tostring(Settings.AimbotActive))
-    print("  MouseHold: " .. tostring(State.MouseHold))
-    print("  AimMethod: " .. tostring(Settings.AimMethod))
-    print("  AimPart: " .. tostring(Settings.AimPart))
-    print("  SmoothingFactor: " .. tostring(Settings.SmoothingFactor))
-    print("  MaxDistance: " .. tostring(Settings.MaxDistance))
-    print("  FOV: " .. tostring(Settings.FOV))
-    print("  VisibleCheck: " .. tostring(Settings.VisibleCheck))
-    print("  UsePrediction: " .. tostring(Settings.UsePrediction))
+    print("\n--- RAGE STATUS ---")
+    print("  RageMode: " .. tostring(Settings.RageMode))
+    print("  UltraRageMode: " .. tostring(Settings.UltraRageMode))
+    print("  SilentAim: " .. tostring(Settings.SilentAim))
+    print("  AutoFire: " .. tostring(Settings.AutoFire))
+    print("  AutoSwitch: " .. tostring(Settings.AutoSwitch))
+    print("  IgnoreWalls: " .. tostring(Settings.IgnoreWalls))
+    print("  MultiPartAim: " .. tostring(Settings.MultiPartAim))
     
-    print("\n--- Target Lock ---")
-    print("  CurrentTarget: " .. tostring(TargetLock.CurrentTarget and TargetLock.CurrentTarget.Name or "None"))
-    print("  LockTime: " .. string.format("%.2f", TargetLock.LockTime))
-    print("  LastScore: " .. string.format("%.2f", TargetLock.LastScore))
-    print("  IsValid: " .. tostring(TargetLock:IsValid()))
+    print("\n--- Target ---")
+    local target = TargetLock:GetTarget()
+    print("  Current: " .. (target and target.Name or "None"))
+    print("  Kills: " .. TargetLock.KillCount)
     
-    print("\n--- Aim Controller ---")
-    print("  IsAiming: " .. tostring(AimController.IsAiming))
-    print("  HasMouseMoveRel: " .. tostring(AimController.HasMouseMoveRel))
+    print("\n--- Test ---")
+    local t, s = FindBestTarget()
+    print("  Best: " .. (t and (t.Name .. " score:" .. string.format("%.1f", s)) or "None"))
     
-    print("\n--- Cache ---")
-    local cacheCount = 0
-    for _ in pairs(VisibilityCache.Data) do
-        cacheCount = cacheCount + 1
-    end
-    print("  VisibilityCache entries: " .. cacheCount)
-    print("  VisibilityCache frame: " .. VisibilityCache.Frame)
-    
-    print("\n--- Test Target Finding ---")
-    local target, score = FindBestTarget()
-    if target then
-        print("  Best target: " .. target.Name .. " (score: " .. string.format("%.2f", score) .. ")")
-    else
-        print("  No valid target found")
-    end
-    
-    print("===================================\n")
+    print("=========================================\n")
 end
 
--- ============================================================================
--- FORCE RESET (Para uso externo)
--- ============================================================================
 function Aimbot:ForceReset()
-    print("[Aimbot] Force reset chamado")
+    print("[Aimbot] Force reset")
     AimbotState:Reset()
     self:StopLoop()
     task.wait(0.1)
     self:StartLoop()
-    print("[Aimbot] Reset completo")
 end
 
 -- ============================================================================
@@ -964,22 +1192,22 @@ Core.Aimbot = {
     Main = Aimbot,
     TargetLock = TargetLock,
     AimController = AimController,
+    SilentAim = SilentAim,
+    AutoFire = AutoFire,
     
     -- Funções públicas
     Update = function() Aimbot:Update() end,
     Initialize = function() Aimbot:Initialize() end,
     Toggle = function(enabled) Aimbot:Toggle(enabled) end,
+    SetRageMode = function(enabled) Aimbot:SetRageMode(enabled) end,
+    SetUltraRageMode = function(enabled) Aimbot:SetUltraRageMode(enabled) end,
     Debug = function() Aimbot:Debug() end,
     ForceReset = function() Aimbot:ForceReset() end,
     
-    -- Para compatibilidade
+    -- Compatibilidade
     CameraBypass = {
-        GetLockedTarget = function()
-            return TargetLock:GetTarget()
-        end,
-        ClearLock = function()
-            TargetLock:Reset()
-        end,
+        GetLockedTarget = function() return TargetLock:GetTarget() end,
+        ClearLock = function() TargetLock:Reset() end,
     },
     
     GetClosestPlayer = FindBestTarget,

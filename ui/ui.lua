@@ -419,6 +419,112 @@ function UI:CreateInterface()
         end
     })
 
+    MainTab:CreateSection("🔥 RAGE MODE")
+
+    MainTab:CreateToggle({  
+        Name = "🔥 Rage Mode",
+        CurrentValue = Settings.RageMode,
+        Callback = function(v)
+            if Core.Aimbot and Core.Aimbot.SetRageMode then
+                Core.Aimbot.SetRageMode(v)
+            else
+                Settings.RageMode = v
+            end
+        end
+    })
+
+    MainTab:CreateToggle({  
+        Name = "⚡ ULTRA RAGE MODE",
+        CurrentValue = Settings.UltraRageMode,
+        Callback = function(v)
+            if Core.Aimbot and Core.Aimbot.SetUltraRageMode then
+                Core.Aimbot.SetUltraRageMode(v)
+            else
+                Settings.UltraRageMode = v
+            end
+        end
+    })
+
+    MainTab:CreateToggle({  
+            Name = "👻 Silent Aim",
+            CurrentValue = Settings.SilentAim or false,
+            Callback = function(v)
+            Settings.SilentAim = v
+        end
+    })
+
+    MainTab:CreateToggle({  
+        Name = "🔫 Auto Fire",
+        CurrentValue = Settings.AutoFire or false,
+        Callback = function(v)
+        Settings.AutoFire = v
+    end
+    })
+
+    MainTab:CreateToggle({  
+    Name = "🔄 Auto Switch Target",
+    CurrentValue = Settings.AutoSwitch or false,
+    Callback = function(v)
+        Settings.AutoSwitch = v
+    end
+    })
+
+    MainTab:CreateSlider({  
+    Name = "⏱️ Switch Delay",
+    Range = {0.05, 1},
+    Increment = 0.05,
+    CurrentValue = Settings.TargetSwitchDelay or 0.3,
+    Callback = function(v)
+        Settings.TargetSwitchDelay = v
+    end
+    })
+
+    MainTab:CreateToggle({  
+        Name = "🧱 Ignorar Paredes",
+        CurrentValue = Settings.IgnoreWalls or false,
+        Callback = function(v)
+            Settings.IgnoreWalls = v
+        end
+    })
+
+    MainTab:CreateToggle({
+        Name = "🎯 Multi-Part Aim",
+        CurrentValue = Settings.MultiPartAim or false,
+        Callback = function(v)
+            Settings.MultiPartAim = v
+        end
+    })
+
+    MainTab:CreateSlider({
+        Name = "📉 Shake Reduction",
+        Range = {0, 10},
+        Increment = 1,
+        CurrentValue = Settings.ShakeReduction or 0,
+        Callback = function(v)
+            Settings.ShakeReduction = v
+        end
+    })
+
+    MainTab:CreateButton({
+        Name = "🔄 Reset Aimbot",
+        Callback = function()
+            if Core.Aimbot and Core.Aimbot.ForceReset then
+                Core.Aimbot.ForceReset()
+                Notify("Aimbot", "Reset completo!")
+            end
+        end,
+    })
+
+    MainTab:CreateButton({
+        Name = "🐛 Debug Aimbot",
+        Callback = function()
+            if Core.Aimbot and Core.Aimbot.Debug then
+                Core.Aimbot.Debug()
+                Notify("Debug", "Verifique o console (F9)")
+            end
+        end,
+    })
+
     -- ========================================================================
     -- ESP TAB
     -- ========================================================================
