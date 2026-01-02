@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB - AIMBOT MODULE v4.2 (FIXED + TARGET MODES)
+-- FORGEHUB - AIMBOT MODULE v4.3 (PATCHES APLICADOS)
 -- ============================================================================
 
 local Core = _G.ForgeHubCore
@@ -27,6 +27,8 @@ local mathRandom = math.random
 local mathClamp = math.clamp
 local mathSqrt = math.sqrt
 local mathHuge = math.huge
+local mathRad = math.rad
+local mathCos = math.cos
 
 local tick = tick
 local pairs = pairs
@@ -40,17 +42,20 @@ local tableRemove = table.remove
 local tableSort = table.sort
 
 -- ============================================================================
--- SETTINGS (COM NOVAS OPÇÕES)
+-- SETTINGS (COM NOVAS OPÇÕES + PATCHES)
 -- ============================================================================
 -- Modos de Rage
 Settings.RageMode = Settings.RageMode or false
 Settings.UltraRageMode = Settings.UltraRageMode or false
 Settings.GodRageMode = Settings.GodRageMode or false
 
--- ★ NOVAS OPÇÕES DE TARGET ★
+-- ★ OPÇÕES DE TARGET ★
 Settings.TargetMode = Settings.TargetMode or "FOV" -- "FOV" ou "Closest"
 Settings.AimOutsideFOV = Settings.AimOutsideFOV or false -- Mira fora do FOV também
 Settings.AutoResetOnKill = Settings.AutoResetOnKill or true -- Reset automático após kill
+
+-- ★ PATCH 3: Altura mínima configurável
+Settings.MinAimHeightBelowCamera = Settings.MinAimHeightBelowCamera or 50
 
 -- Silent Aim Settings
 Settings.SilentAim = Settings.SilentAim or false
@@ -126,18 +131,31 @@ local function DistanceSquared(pos1, pos2)
     return delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
 end
 
--- ★ NOVO: Validação de posição (evita mirar no chão)
+-- ★ PATCH 3: IsValidAimPosition mais robusto
 local function IsValidAimPosition(position)
     if not position then return false end
     if typeof(position) ~= "Vector3" then return false end
     
-    -- Verifica se a posição é muito baixa (provavelmente chão)
     local Camera = GetCamera()
     if Camera then
         local camY = Camera.CFrame.Position.Y
-        -- Se a posição está mais de 50 studs abaixo da câmera, provavelmente é inválida
-        if position.Y < camY - 50 then
+        local minHeight = Settings.MinAimHeightBelowCamera or 50
+        
+        -- Se a posição está muito abaixo da câmera, provavelmente é inválida
+        if position.Y < camY - minHeight then
             return false
+        end
+        
+        -- ★ NOVO: Comparação adicional com HumanoidRootPart do jogador local
+        if LocalPlayer.Character then
+            local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local playerY = hrp.Position.Y
+                -- Se alvo está muito abaixo do nosso nível vertical (mais de 30 studs)
+                if position.Y < playerY - 30 then
+                    return false
+                end
+            end
         end
     end
     
@@ -276,7 +294,6 @@ local function InvalidatePartCache(player)
     PartCacheTime[player] = nil
 end
 
--- ★ NOVO: Verifica se o cache ainda é válido
 local function IsPartCacheValid(player)
     local cache = PartCache[player]
     if not cache then return false end
@@ -341,7 +358,6 @@ local function GetPlayerData(player)
     local cached = PlayerDataCache[player]
     
     if cached and (now - cached.time) < PLAYER_DATA_CACHE_TTL then
-        -- ★ FIX: Revalida se ainda é válido
         if cached.data and cached.data.isValid then
             local anchor = cached.data.anchor
             if anchor and anchor.Parent and anchor:IsDescendantOf(workspace) then
@@ -351,11 +367,9 @@ local function GetPlayerData(player)
                 end
             end
         end
-        -- Cache inválido, limpa
         PlayerDataCache[player] = nil
     end
     
-    -- Usa PartCache primeiro
     if IsPartCacheValid(player) then
         local partCache = PartCache[player]
         local anchor = partCache._anchor
@@ -373,12 +387,10 @@ local function GetPlayerData(player)
         return data
     end
     
-    -- Fallback para SemanticEngine
     local SemanticEngine = Core.SemanticEngine
     if SemanticEngine and SemanticEngine.GetCachedPlayerData then
         local data = SemanticEngine:GetCachedPlayerData(player)
         if data and data.isValid then 
-            -- ★ FIX: Valida antes de cachear
             if data.anchor and data.anchor.Parent and data.anchor:IsDescendantOf(workspace) then
                 if not data.humanoid or data.humanoid.Health > 0 then
                     PlayerDataCache[player] = {data = data, time = now}
@@ -388,7 +400,6 @@ local function GetPlayerData(player)
         end
     end
     
-    -- Fallback manual
     local character = player.Character
     if not character then return nil end
     
@@ -402,7 +413,6 @@ local function GetPlayerData(player)
     
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     
-    -- ★ FIX: Não retorna dados de jogadores mortos
     if humanoid and humanoid.Health <= 0 then
         return nil
     end
@@ -422,7 +432,6 @@ local function GetPlayerData(player)
     return data
 end
 
--- ★ NOVO: Invalida cache de player
 local function InvalidatePlayerData(player)
     PlayerDataCache[player] = nil
     InvalidatePartCache(player)
@@ -504,7 +513,6 @@ local function GetAimPart(player, partName)
     local data = GetPlayerData(player)
     if not data or not data.model then return nil end
     
-    -- ★ FIX: Valida que o model ainda existe
     if not data.model.Parent then return nil end
     
     partName = partName or "Head"
@@ -533,7 +541,6 @@ local function GetAimPart(player, partName)
         end
     end
     
-    -- ★ FIX: Valida anchor antes de retornar
     if data.anchor and data.anchor.Parent then
         return data.anchor
     end
@@ -612,6 +619,9 @@ local function GetBestAimPart(player, ignoreFOV)
         local part = partData.part
         
         if not part or not part.Parent then continue end
+        
+        -- ★ PATCH 3: Valida altura da parte
+        if not IsValidAimPosition(part.Position) then continue end
         
         local screenPos, onScreen = WorldToViewportPoint(Camera, part.Position)
         
@@ -743,7 +753,6 @@ local function PredictPosition(player, targetPart)
     
     local basePos = targetPart.Position
     
-    -- ★ FIX: Valida posição base
     if not IsValidAimPosition(basePos) then
         return nil
     end
@@ -796,7 +805,6 @@ local function PredictPosition(player, targetPart)
         predictedPos = predictedPos + (acceleration * 0.5 * timeToTarget * timeToTarget)
     end
     
-    -- ★ FIX: Valida posição predita
     if not IsValidAimPosition(predictedPos) then
         return basePos
     end
@@ -846,179 +854,12 @@ local function IsVisible(player, targetPart)
 end
 
 -- ============================================================================
--- TARGET LOCK SYSTEM (MELHORADO)
+-- AIMBOT STATE (Forward Declaration)
 -- ============================================================================
-local TargetLock = {
-    CurrentTarget = nil,
-    LockTime = 0,
-    LastScore = mathHuge,
-    LastKill = 0,
-    KillCount = 0,
-    MinLockDuration = 0.05,
-    MaxLockDuration = 0.5,
-    ImprovementThreshold = 0.4,
-    LastValidPosition = nil, -- ★ NOVO: Última posição válida
-    DeathDetected = false, -- ★ NOVO: Flag de morte detectada
-}
-
-function TargetLock:Reset()
-    -- ★ FIX: Limpa tudo ao resetar
-    if self.CurrentTarget then
-        ClearPredictionHistory(self.CurrentTarget)
-        VisibilityCache:Invalidate(self.CurrentTarget)
-    end
-    
-    self.CurrentTarget = nil
-    self.LockTime = 0
-    self.LastScore = mathHuge
-    self.LastValidPosition = nil
-    self.DeathDetected = false
-end
-
--- ★ NOVO: Verifica se alvo está vivo
-function TargetLock:IsTargetAlive()
-    if not self.CurrentTarget then return false end
-    
-    local data = GetPlayerData(self.CurrentTarget)
-    if not data then return false end
-    if not data.isValid then return false end
-    if not data.anchor or not data.anchor.Parent then return false end
-    
-    if data.humanoid then
-        if data.humanoid.Health <= 0 then
-            return false
-        end
-    end
-    
-    return true
-end
-
-function TargetLock:IsValid()
-    if not self.CurrentTarget then return false end
-    
-    -- ★ FIX: Verifica se está vivo primeiro
-    if not self:IsTargetAlive() then
-        if not self.DeathDetected then
-            self.DeathDetected = true
-            self.KillCount = self.KillCount + 1
-            self.LastKill = tick()
-            
-            if Notify and Settings.AutoResetOnKill then
-                -- Notifica kill
-            end
-        end
-        return false
-    end
-    
-    self.DeathDetected = false
-    
-    local data = GetPlayerData(self.CurrentTarget)
-    if not data or not data.isValid then return false end
-    
-    local Camera = GetCamera()
-    local distSq = DistanceSquared(data.anchor.Position, Camera.CFrame.Position)
-    
-    local maxDist = Settings.MaxDistance or 2000
-    if Settings.GodRageMode then
-        maxDist = 99999
-    elseif Settings.UltraRageMode then
-        maxDist = maxDist * 3
-    elseif Settings.RageMode then
-        maxDist = maxDist * 2
-    end
-    
-    if distSq > maxDist * maxDist then return false end
-    
-    -- ★ NOVO: Atualiza última posição válida
-    self.LastValidPosition = data.anchor.Position
-    
-    return true
-end
-
-function TargetLock:TryLock(candidate, score)
-    if not candidate then return end
-    
-    -- ★ FIX: Verifica se o candidato está vivo
-    local data = GetPlayerData(candidate)
-    if not data or not data.isValid then return end
-    if data.humanoid and data.humanoid.Health <= 0 then return end
-    
-    local now = tick()
-    
-    if Settings.GodRageMode then
-        self.MaxLockDuration = 0.1
-        self.ImprovementThreshold = 0.2
-    elseif Settings.UltraRageMode then
-        self.MaxLockDuration = 0.3
-        self.ImprovementThreshold = 0.3
-    elseif Settings.RageMode then
-        self.MaxLockDuration = 0.5
-        self.ImprovementThreshold = 0.4
-    elseif Settings.AutoSwitch then
-        self.MaxLockDuration = Settings.TargetSwitchDelay or 0.1
-        self.ImprovementThreshold = 0.5
-    else
-        self.MaxLockDuration = 1.5
-        self.ImprovementThreshold = 0.7
-    end
-    
-    if not self.CurrentTarget then
-        self.CurrentTarget = candidate
-        self.LockTime = now
-        self.LastScore = score
-        self.DeathDetected = false
-        return
-    end
-    
-    if self.CurrentTarget == candidate then
-        self.LastScore = score
-        return
-    end
-    
-    if not self:IsValid() then
-        self.CurrentTarget = candidate
-        self.LockTime = now
-        self.LastScore = score
-        self.DeathDetected = false
-        return
-    end
-    
-    local lockDuration = now - self.LockTime
-    
-    if Settings.AutoSwitch and lockDuration > (Settings.TargetSwitchDelay or 0.1) then
-        self.CurrentTarget = candidate
-        self.LockTime = now
-        self.LastScore = score
-        self.DeathDetected = false
-        return
-    end
-    
-    if lockDuration > self.MaxLockDuration then
-        self.CurrentTarget = candidate
-        self.LockTime = now
-        self.LastScore = score
-        self.DeathDetected = false
-        return
-    end
-    
-    if score < self.LastScore * self.ImprovementThreshold then
-        self.CurrentTarget = candidate
-        self.LockTime = now
-        self.LastScore = score
-        self.DeathDetected = false
-    end
-end
-
-function TargetLock:GetTarget()
-    if self:IsValid() then
-        return self.CurrentTarget
-    end
-    self:Reset()
-    return nil
-end
+local AimbotState -- Forward declaration
 
 -- ============================================================================
--- AIM CONTROLLER
+-- AIM CONTROLLER (COM PATCHES 1 e 2)
 -- ============================================================================
 local AimController = {
     IsAiming = false,
@@ -1028,7 +869,8 @@ local AimController = {
     AimHistory = {},
     MaxHistory = 5,
     SmoothHistory = {},
-    LastValidAimPos = nil, -- ★ NOVO
+    LastValidAimPos = nil,
+    StopTransitionActive = false, -- ★ NOVO: Flag para transição ativa
 }
 
 function AimController:DetectMethods()
@@ -1039,22 +881,91 @@ function AimController:StartAiming()
     if self.IsAiming then return end
     self.IsAiming = true
     self.OriginalCFrame = GetCamera().CFrame
+    self.StopTransitionActive = false
 end
 
+-- ★ PATCH 1: StopAiming suave com lerp
 function AimController:StopAiming()
     if not self.IsAiming then return end
     self.IsAiming = false
+
+    local prevCFrame = self.OriginalCFrame
     self.OriginalCFrame = nil
     self.LastAimPos = nil
     self.LastValidAimPos = nil
     self.AimHistory = {}
     self.SmoothHistory = {}
-    
-    pcall(function()
+
+    SafeCall(function()
         local Camera = GetCamera()
-        if LocalPlayer.Character then
-            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-            if hum then Camera.CameraSubject = hum end
+        if not Camera then return end
+
+        -- Se tínhamos um OriginalCFrame válido, faça um lerp suave para ele
+        if prevCFrame then
+            local duration = 0.18 -- ajuste se quiser mais/menos suave
+            local t0 = tick()
+            local start = Camera.CFrame
+            
+            self.StopTransitionActive = true
+
+            task.spawn(function()
+                while tick() - t0 < duration do
+                    -- Se aimbot retomou durante a transição, cancela
+                    if self.IsAiming then
+                        self.StopTransitionActive = false
+                        return
+                    end
+                    
+                    local a = (tick() - t0) / duration
+                    -- Usa easing suave
+                    a = a * a * (3 - 2 * a) -- smoothstep
+                    Camera.CFrame = start:Lerp(prevCFrame, a)
+                    task.wait()
+                end
+                
+                -- garante posição final exata
+                if not self.IsAiming then
+                    Camera.CFrame = prevCFrame
+                end
+                
+                self.StopTransitionActive = false
+
+                -- só restaura CameraSubject se a câmera não estiver em 'Scriptable'
+                if LocalPlayer.Character then
+                    local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                    if hum and Camera.CameraType ~= Enum.CameraType.Scriptable then
+                        Camera.CameraSubject = hum
+                    end
+                end
+            end)
+        else
+            -- fallback antigo se não houver prevCFrame
+            if LocalPlayer.Character then
+                local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                if hum and Camera.CameraType ~= Enum.CameraType.Scriptable then
+                    Camera.CameraSubject = hum
+                end
+            end
+        end
+    end, "AimController:StopAiming(smooth)")
+end
+
+-- ★ PATCH 2: HoldAndStop - mantém mira por curto período após kill
+function AimController:HoldAndStop(seconds)
+    seconds = seconds or 0.18
+    if not self.IsAiming then
+        self:StopAiming()
+        return
+    end
+
+    task.spawn(function()
+        task.wait(seconds)
+        -- Se durante o hold o aimbot não retomou, pare suavemente
+        if AimbotState and not AimbotState.Active then
+            self:StopAiming()
+        elseif not self.IsAiming then
+            -- Já parou por outro motivo
+            return
         end
     end)
 end
@@ -1104,13 +1015,16 @@ function AimController:ApplyShakeReduction(targetPos)
 end
 
 function AimController:ApplyAim(targetPosition, smoothing)
-    -- ★ FIX: Validação rigorosa da posição
     if not targetPosition then 
         return false 
     end
     
+    -- Cancela se transição de stop está ativa
+    if self.StopTransitionActive then
+        return false
+    end
+    
     if not IsValidAimPosition(targetPosition) then
-        -- Tenta usar última posição válida
         if self.LastValidAimPos and IsValidAimPosition(self.LastValidAimPos) then
             targetPosition = self.LastValidAimPos
         else
@@ -1118,7 +1032,6 @@ function AimController:ApplyAim(targetPosition, smoothing)
         end
     end
     
-    -- ★ NOVO: Salva última posição válida
     self.LastValidAimPos = targetPosition
     
     local Camera = GetCamera()
@@ -1220,6 +1133,181 @@ function AimController:Method_MouseMoveRel(targetPosition, smoothFactor)
 end
 
 -- ============================================================================
+-- TARGET LOCK SYSTEM (MELHORADO COM PATCH 2)
+-- ============================================================================
+local TargetLock = {
+    CurrentTarget = nil,
+    LockTime = 0,
+    LastScore = mathHuge,
+    LastKill = 0,
+    KillCount = 0,
+    MinLockDuration = 0.05,
+    MaxLockDuration = 0.5,
+    ImprovementThreshold = 0.4,
+    LastValidPosition = nil,
+    DeathDetected = false,
+}
+
+function TargetLock:Reset()
+    if self.CurrentTarget then
+        ClearPredictionHistory(self.CurrentTarget)
+        VisibilityCache:Invalidate(self.CurrentTarget)
+    end
+    
+    self.CurrentTarget = nil
+    self.LockTime = 0
+    self.LastScore = mathHuge
+    self.LastValidPosition = nil
+    self.DeathDetected = false
+end
+
+function TargetLock:IsTargetAlive()
+    if not self.CurrentTarget then return false end
+    
+    local data = GetPlayerData(self.CurrentTarget)
+    if not data then return false end
+    if not data.isValid then return false end
+    if not data.anchor or not data.anchor.Parent then return false end
+    
+    if data.humanoid then
+        if data.humanoid.Health <= 0 then
+            return false
+        end
+    end
+    
+    return true
+end
+
+function TargetLock:IsValid()
+    if not self.CurrentTarget then return false end
+    
+    -- ★ PATCH 2: Detecta morte e usa HoldAndStop
+    if not self:IsTargetAlive() then
+        if not self.DeathDetected then
+            self.DeathDetected = true
+            self.KillCount = self.KillCount + 1
+            self.LastKill = tick()
+            
+            -- ★ PATCH 2: Usa HoldAndStop em vez de reset imediato
+            if Settings.AutoResetOnKill then
+                AimController:HoldAndStop(0.18)
+            else
+                AimController:StopAiming()
+            end
+            
+            if Notify then
+                -- Notifica kill silenciosamente
+            end
+        end
+        return false
+    end
+    
+    self.DeathDetected = false
+    
+    local data = GetPlayerData(self.CurrentTarget)
+    if not data or not data.isValid then return false end
+    
+    local Camera = GetCamera()
+    local distSq = DistanceSquared(data.anchor.Position, Camera.CFrame.Position)
+    
+    local maxDist = Settings.MaxDistance or 2000
+    if Settings.GodRageMode then
+        maxDist = 99999
+    elseif Settings.UltraRageMode then
+        maxDist = maxDist * 3
+    elseif Settings.RageMode then
+        maxDist = maxDist * 2
+    end
+    
+    if distSq > maxDist * maxDist then return false end
+    
+    self.LastValidPosition = data.anchor.Position
+    
+    return true
+end
+
+function TargetLock:TryLock(candidate, score)
+    if not candidate then return end
+    
+    local data = GetPlayerData(candidate)
+    if not data or not data.isValid then return end
+    if data.humanoid and data.humanoid.Health <= 0 then return end
+    
+    local now = tick()
+    
+    if Settings.GodRageMode then
+        self.MaxLockDuration = 0.1
+        self.ImprovementThreshold = 0.2
+    elseif Settings.UltraRageMode then
+        self.MaxLockDuration = 0.3
+        self.ImprovementThreshold = 0.3
+    elseif Settings.RageMode then
+        self.MaxLockDuration = 0.5
+        self.ImprovementThreshold = 0.4
+    elseif Settings.AutoSwitch then
+        self.MaxLockDuration = Settings.TargetSwitchDelay or 0.1
+        self.ImprovementThreshold = 0.5
+    else
+        self.MaxLockDuration = 1.5
+        self.ImprovementThreshold = 0.7
+    end
+    
+    if not self.CurrentTarget then
+        self.CurrentTarget = candidate
+        self.LockTime = now
+        self.LastScore = score
+        self.DeathDetected = false
+        return
+    end
+    
+    if self.CurrentTarget == candidate then
+        self.LastScore = score
+        return
+    end
+    
+    if not self:IsValid() then
+        self.CurrentTarget = candidate
+        self.LockTime = now
+        self.LastScore = score
+        self.DeathDetected = false
+        return
+    end
+    
+    local lockDuration = now - self.LockTime
+    
+    if Settings.AutoSwitch and lockDuration > (Settings.TargetSwitchDelay or 0.1) then
+        self.CurrentTarget = candidate
+        self.LockTime = now
+        self.LastScore = score
+        self.DeathDetected = false
+        return
+    end
+    
+    if lockDuration > self.MaxLockDuration then
+        self.CurrentTarget = candidate
+        self.LockTime = now
+        self.LastScore = score
+        self.DeathDetected = false
+        return
+    end
+    
+    if score < self.LastScore * self.ImprovementThreshold then
+        self.CurrentTarget = candidate
+        self.LockTime = now
+        self.LastScore = score
+        self.DeathDetected = false
+    end
+end
+
+function TargetLock:GetTarget()
+    if self:IsValid() then
+        return self.CurrentTarget
+    end
+    self:Reset()
+    return nil
+end
+
+-- ============================================================================
 -- SILENT AIM SYSTEM
 -- ============================================================================
 local SilentAim = {
@@ -1246,6 +1334,9 @@ local function IsWeaponRemote(name)
     return false
 end
 
+-- Forward declaration for FindBestTargetForSilent
+local FindBestTargetForSilent
+
 function SilentAim:GetTargetPosition()
     local target = TargetLock:GetTarget()
     if not target then
@@ -1254,7 +1345,6 @@ function SilentAim:GetTargetPosition()
     
     if not target then return nil end
     
-    -- ★ FIX: Verifica se alvo está vivo
     local data = GetPlayerData(target)
     if not data or not data.isValid then return nil end
     if data.humanoid and data.humanoid.Health <= 0 then return nil end
@@ -1273,7 +1363,6 @@ function SilentAim:GetTargetPosition()
     
     local pos = PredictPosition(target, aimPart)
     
-    -- ★ FIX: Valida posição
     if not pos or not IsValidAimPosition(pos) then
         return nil
     end
@@ -1468,7 +1557,6 @@ local function ProcessProjectiles()
     local target = TargetLock:GetTarget()
     if not target then return end
     
-    -- ★ FIX: Verifica se alvo está vivo
     local data = GetPlayerData(target)
     if not data or not data.isValid then return end
     if data.humanoid and data.humanoid.Health <= 0 then return end
@@ -1755,7 +1843,7 @@ function AutoFire:TryFire()
 end
 
 -- ============================================================================
--- TARGET FINDER (COM TARGET MODE)
+-- TARGET FINDER (COM PATCH 4 - MELHOR FOV/DOT PRODUCT)
 -- ============================================================================
 local CachedPlayers = {}
 local LastPlayerCacheUpdate = 0
@@ -1770,7 +1858,7 @@ local function GetCachedPlayers()
     return CachedPlayers
 end
 
--- ★ NOVA FUNÇÃO: FindBestTarget com Target Mode
+-- ★ PATCH 4: FindBestTarget com cálculo de cosThreshold melhorado
 local function FindBestTarget()
     local Camera = GetCamera()
     if not Camera then return nil, mathHuge end
@@ -1780,17 +1868,22 @@ local function FindBestTarget()
     local mousePos = UserInputService:GetMouseLocation()
     local WorldToViewportPoint = Camera.WorldToViewportPoint
     
-    -- ★ NOVO: Pega o modo de target
-    local targetMode = Settings.TargetMode or "FOV" -- "FOV" ou "Closest"
+    local targetMode = Settings.TargetMode or "FOV"
     
-    local currentFOV = Settings.AimbotFOV or 180
+    -- ★ PATCH 4: Calcula cosThreshold a partir do FOV
+    local fovDeg = Settings.AimbotFOV or 180
     if Settings.GodRageMode then
-        currentFOV = 99999
+        fovDeg = 360 -- Aceita qualquer ângulo
     elseif Settings.UltraRageMode then
-        currentFOV = currentFOV * 5
+        fovDeg = mathMin(fovDeg * 5, 360)
     elseif Settings.RageMode then
-        currentFOV = currentFOV * 3
+        fovDeg = mathMin(fovDeg * 3, 360)
     end
+    
+    local halfRad = mathRad(fovDeg * 0.5)
+    local cosThreshold = mathCos(halfRad)
+    
+    local currentFOV = fovDeg
     local currentFOVSq = currentFOV * currentFOV
     
     local maxDist = Settings.MaxDistance or 2000
@@ -1814,7 +1907,6 @@ local function FindBestTarget()
         if not data or not data.isValid or not data.anchor then continue end
         if not data.anchor.Parent or not data.anchor:IsDescendantOf(workspace) then continue end
         
-        -- ★ FIX: Verifica se está vivo
         if data.humanoid and data.humanoid.Health <= 0 then continue end
         
         if Settings.IgnoreTeamAimbot and AreSameTeam(LocalPlayer, player) then continue end
@@ -1822,38 +1914,43 @@ local function FindBestTarget()
         local distSq = DistanceSquared(data.anchor.Position, camPos)
         if distSq > maxDistSq then continue end
         
-        local screenPos, onScreen = WorldToViewportPoint(Camera, data.anchor.Position)
+        -- ★ PATCH 4: Usa GetBestAimPart para obter aimPart (não apenas anchor)
+        local aimPart = GetBestAimPart(player)
+        if not aimPart or not aimPart.Parent then continue end
         
-        -- ★ NOVO: AimOutsideFOV permite mirar em alvos fora da tela
+        -- ★ PATCH 4: Valida altura do aimPart
+        if not IsValidAimPosition(aimPart.Position) then continue end
+        
+        local screenPos, onScreen = WorldToViewportPoint(Camera, aimPart.Position)
+        
         local allowOutside = Settings.GodRageMode or Settings.UltraRageMode or Settings.AimOutsideFOV
         if not allowOutside and not onScreen then continue end
+        
+        -- ★ PATCH 4: Usa aimPart.Position para calcular direção (não anchor)
+        local dirToTarget = (aimPart.Position - camPos).Unit
+        local dot = camLook:Dot(dirToTarget)
+        
+        -- ★ PATCH 4: Usa cosThreshold calculado
+        if not Settings.AimOutsideFOV and not Settings.GodRageMode then
+            if dot < cosThreshold then
+                continue
+            end
+        end
         
         local distToMouse = onScreen and (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude or 99999
         local distToMouseSq = distToMouse * distToMouse
         
-        -- ★ NOVO: Se AimOutsideFOV está ativo, não checa FOV
+        -- FOV check adicional baseado em pixels (para modo FOV)
         local checkFOV = Settings.UseAimbotFOV and not Settings.AimOutsideFOV and not Settings.GodRageMode
         if checkFOV and distToMouseSq > currentFOVSq then continue end
-        
-        local dirToTarget = (data.anchor.Position - camPos).Unit
-        local dot = camLook:Dot(dirToTarget)
-        
-        local minDot = Settings.GodRageMode and -1 or (Settings.UltraRageMode and -0.5 or (Settings.RageMode and -0.2 or 0.1))
-        -- ★ NOVO: AimOutsideFOV permite mirar em qualquer direção
-        if Settings.AimOutsideFOV then
-            minDot = -1
-        end
-        if dot < minDot then continue end
         
         local distance = mathSqrt(distSq)
         local score
         
-        -- ★ NOVO: Calcula score baseado no TargetMode
         if targetMode == "Closest" then
-            -- Modo Closest: prioriza distância
+            -- Modo Closest: prioriza distância 3D
             score = distance
             
-            -- Ainda considera saúde em rage modes
             if (Settings.RageMode or Settings.UltraRageMode or Settings.GodRageMode) and data.humanoid then
                 local healthPercent = data.humanoid.Health / data.humanoid.MaxHealth
                 score = score * (0.3 + healthPercent * 0.7)
@@ -1880,6 +1977,7 @@ local function FindBestTarget()
         candidates[#candidates + 1] = {
             player = player,
             data = data,
+            aimPart = aimPart, -- ★ PATCH 4: Guarda aimPart
             score = score,
             distance = distance,
             distToMouse = distToMouse,
@@ -1887,7 +1985,6 @@ local function FindBestTarget()
         }
     end
     
-    -- Se não encontrou candidatos e AimOutsideFOV está ativo, não retorna nil ainda
     if #candidates == 0 then
         return nil, mathHuge
     end
@@ -1902,12 +1999,11 @@ local function FindBestTarget()
         
         local candidate = candidates[i]
         
-        -- ★ FIX: Revalida que ainda está vivo
         local data = GetPlayerData(candidate.player)
         if not data or not data.isValid then continue end
         if data.humanoid and data.humanoid.Health <= 0 then continue end
         
-        local aimPart = GetBestAimPart(candidate.player)
+        local aimPart = candidate.aimPart or GetBestAimPart(candidate.player)
         if not aimPart or not aimPart.Parent then continue end
         
         checked = checked + 1
@@ -1928,7 +2024,8 @@ local function FindBestTarget()
     return nil, mathHuge
 end
 
-local function FindBestTargetForSilent()
+-- Implementação de FindBestTargetForSilent
+FindBestTargetForSilent = function()
     local Camera = GetCamera()
     if not Camera then return nil end
     
@@ -1962,6 +2059,9 @@ local function FindBestTargetForSilent()
         local targetPart = GetBestAimPart(player)
         if not targetPart or not targetPart.Parent then continue end
         
+        -- ★ PATCH 3: Valida altura
+        if not IsValidAimPosition(targetPart.Position) then continue end
+        
         local screenPos, onScreen = WorldToViewportPoint(Camera, targetPart.Position)
         
         local allowOutside = Settings.GodRageMode or Settings.AimOutsideFOV
@@ -1986,7 +2086,7 @@ end
 -- ============================================================================
 -- AIMBOT STATE MACHINE
 -- ============================================================================
-local AimbotState = {
+AimbotState = {
     Active = false,
     LastUpdate = 0,
     ErrorCount = 0,
@@ -2074,7 +2174,6 @@ function Aimbot:Update()
     local target = TargetLock:GetTarget()
     
     if target then
-        -- ★ FIX: Verifica se alvo ainda é válido
         local data = GetPlayerData(target)
         if not data or not data.isValid then
             TargetLock:Reset()
@@ -2083,8 +2182,8 @@ function Aimbot:Update()
         end
         
         if data.humanoid and data.humanoid.Health <= 0 then
+            -- ★ PATCH 2: HoldAndStop já é chamado em TargetLock:IsValid()
             TargetLock:Reset()
-            AimController:StopAiming()
             return
         end
         
@@ -2093,9 +2192,7 @@ function Aimbot:Update()
         if aimPart and aimPart.Parent then
             local aimPos = PredictPosition(target, aimPart)
             
-            -- ★ FIX: Valida posição antes de aplicar
             if not aimPos or not IsValidAimPosition(aimPos) then
-                -- Tenta usar posição direta da parte
                 aimPos = aimPart.Position
                 if not IsValidAimPosition(aimPos) then
                     TargetLock:Reset()
@@ -2285,6 +2382,14 @@ function Aimbot:SetAimOutsideFOV(enabled)
     end
 end
 
+-- ★ NOVO: Configurar altura mínima
+function Aimbot:SetMinAimHeight(height)
+    Settings.MinAimHeightBelowCamera = height
+    if Notify then
+        Notify("Min Aim Height", "Ajustado para " .. tostring(height))
+    end
+end
+
 function Aimbot:SetSilentFOV(fov)
     Settings.SilentFOV = fov
 end
@@ -2320,18 +2425,22 @@ function Aimbot:Initialize()
     self.Initialized = true
     
     print("═══════════════════════════════════════════")
-    print("  AIMBOT v4.2 - TARGET MODES + FIX")
+    print("  AIMBOT v4.3 - PATCHES APLICADOS")
     print("═══════════════════════════════════════════")
     print("[✓] Target Mode: " .. (Settings.TargetMode or "FOV"))
     print("[✓] Aim Outside FOV: " .. tostring(Settings.AimOutsideFOV))
     print("[✓] Auto Reset on Kill: " .. tostring(Settings.AutoResetOnKill))
+    print("[✓] Min Aim Height: " .. tostring(Settings.MinAimHeightBelowCamera))
     print("[✓] MouseMoveRel: " .. (AimController.HasMouseMoveRel and "OK" or "N/A"))
     print("[✓] SilentAim Hooks: " .. (SilentAim.HookedNamecall and "OK" or "N/A"))
+    print("[✓] Smooth StopAiming: OK")
+    print("[✓] HoldAndStop on Kill: OK")
+    print("[✓] CosThreshold FOV: OK")
     print("═══════════════════════════════════════════")
 end
 
 function Aimbot:Debug()
-    print("\n═══════════════ AIMBOT DEBUG v4.2 ═══════════════")
+    print("\n═══════════════ AIMBOT DEBUG v4.3 ═══════════════")
     print("Initialized: " .. tostring(self.Initialized))
     print("Connection Active: " .. tostring(self.Connection ~= nil))
     
@@ -2339,6 +2448,7 @@ function Aimbot:Debug()
     print("  TargetMode: " .. (Settings.TargetMode or "FOV"))
     print("  AimOutsideFOV: " .. tostring(Settings.AimOutsideFOV))
     print("  AutoResetOnKill: " .. tostring(Settings.AutoResetOnKill))
+    print("  MinAimHeightBelowCamera: " .. tostring(Settings.MinAimHeightBelowCamera))
     
     print("\n─── RAGE STATUS ───")
     print("  RageMode: " .. tostring(Settings.RageMode))
@@ -2350,12 +2460,19 @@ function Aimbot:Debug()
     print("  MagicBullet: " .. tostring(Settings.MagicBullet))
     print("  TriggerBot: " .. tostring(Settings.TriggerBot))
     
+    print("\n─── AIM CONTROLLER ───")
+    print("  IsAiming: " .. tostring(AimController.IsAiming))
+    print("  StopTransitionActive: " .. tostring(AimController.StopTransitionActive))
+    print("  LastValidAimPos: " .. tostring(AimController.LastValidAimPos))
+    print("  HasMouseMoveRel: " .. tostring(AimController.HasMouseMoveRel))
+    
     print("\n─── Target ───")
     local target = TargetLock:GetTarget()
     print("  Current: " .. (target and target.Name or "None"))
     print("  Is Alive: " .. tostring(target and TargetLock:IsTargetAlive() or false))
     print("  Kills: " .. TargetLock.KillCount)
     print("  Last Valid Pos: " .. tostring(TargetLock.LastValidPosition))
+    print("  Death Detected: " .. tostring(TargetLock.DeathDetected))
     
     print("\n─── Test ───")
     local t, s = FindBestTarget()
@@ -2371,10 +2488,6 @@ function Aimbot:ForceReset()
     PartCacheTime = {}
     TeamCache = {}
     PlayerDataCache = {}
-    PredictionHistory = {}
-    LastPredUpdate = {}
-    VisibilityCache:Clear()
-    AimController.LastValidAimPos = nil
     self:StopLoop()
     task.wait(0.1)
     self:StartLoop()
@@ -2403,10 +2516,6 @@ Core.Aimbot = {
     SetSilentAim = function(enabled) Aimbot:SetSilentAim(enabled) end,
     SetMagicBullet = function(enabled) Aimbot:SetMagicBullet(enabled) end,
     SetTriggerBot = function(enabled) Aimbot:SetTriggerBot(enabled) end,
-    
-    -- ★ NOVAS FUNÇÕES
-    SetTargetMode = function(mode) Aimbot:SetTargetMode(mode) end,
-    SetAimOutsideFOV = function(enabled) Aimbot:SetAimOutsideFOV(enabled) end,
     
     SetSilentFOV = function(fov) Aimbot:SetSilentFOV(fov) end,
     SetTriggerFOV = function(fov) Aimbot:SetTriggerFOV(fov) end,
