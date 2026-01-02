@@ -259,14 +259,14 @@ if not ESP then return end
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- Primeiro carregar dependências do Aimbot
-local AimbotUtils = LoadModule(BASE_URL .. "aimbot/utils.lua", "Aimbot/Utils")
-local AimbotSettings = LoadModule(BASE_URL .. "aimbot/settings.lua", "Aimbot/Settings")
-local AimbotEventBus = LoadModule(BASE_URL .. "aimbot/eventbus.lua", "Aimbot/EventBus")
-local AimbotHooks = LoadModule(BASE_URL .. "aimbot/Hooks.lua", "Aimbot/Hooks")
-local AimbotCore = LoadModule(BASE_URL .. "aimbot/Aimbot.lua", "Aimbot/Core")
-local AimbotTrigger = LoadModule(BASE_URL .. "aimbot/Trigger.lua", "Aimbot/Trigger")
-local AimbotSilent = LoadModule(BASE_URL .. "aimbot/Silent.lua", "Aimbot/Silent")
-local AimbotMagicBullet = LoadModule(BASE_URL .. "aimbot/MagicBullet.lua", "Aimbot/MagicBullet")
+local AimbotUtils = LoadModule(BASE_URL .. "aimbot/utils.lua", "aimbot/utils")
+local AimbotSettings = LoadModule(BASE_URL .. "aimbot/settings.lua", "aimbot/settings")
+local AimbotEventBus = LoadModule(BASE_URL .. "aimbot/eventbus.lua", "aimbot/eventbus")
+local AimbotHooks = LoadModule(BASE_URL .. "aimbot/hooks.lua", "aimbot/hooks")
+local AimbotCore = LoadModule(BASE_URL .. "aimbot/aimbot.lua", "aimbot/core")
+local AimbotTrigger = LoadModule(BASE_URL .. "aimbot/trigger.lua", "aimbot/trigger")
+local AimbotSilent = LoadModule(BASE_URL .. "aimbot/silent.lua", "aimbot/silent")
+local AimbotMagicBullet = LoadModule(BASE_URL .. "aimbot/magicbullet.lua", "aimbot/magicbullet")
 
 -- Verificar se todos carregaram
 if not (AimbotUtils and AimbotSettings and AimbotEventBus and AimbotHooks and AimbotCore) then
