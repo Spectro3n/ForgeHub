@@ -17,6 +17,7 @@ local State = Core.State
 local DrawingPool = Core.DrawingPool
 local SemanticEngine = Core.SemanticEngine
 local PerformanceManager = Core.PerformanceManager
+local Aimbot = Core.Aimbot
 
 local RunService = Core.RunService
 local UserInputService = Core.UserInputService
