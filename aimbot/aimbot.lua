@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB - AIMBOT MODULE v4.1 (OPTIMIZED ULTRA RAGE EDITION)
+-- FORGEHUB - AIMBOT MODULE v4.2 (FIXED + TARGET MODES)
 -- ============================================================================
 
 local Core = _G.ForgeHubCore
@@ -19,7 +19,6 @@ local Settings = Core.Settings
 local State = Core.State
 local Notify = Core.Notify
 
--- Funções math prelocalizadas
 local mathMax = math.max
 local mathMin = math.min
 local mathAbs = math.abs
@@ -27,8 +26,8 @@ local mathSin = math.sin
 local mathRandom = math.random
 local mathClamp = math.clamp
 local mathSqrt = math.sqrt
+local mathHuge = math.huge
 
--- Cache de funções
 local tick = tick
 local pairs = pairs
 local ipairs = ipairs
@@ -41,31 +40,47 @@ local tableRemove = table.remove
 local tableSort = table.sort
 
 -- ============================================================================
--- ULTRA RAGE SETTINGS
+-- SETTINGS (COM NOVAS OPÇÕES)
 -- ============================================================================
+-- Modos de Rage
 Settings.RageMode = Settings.RageMode or false
 Settings.UltraRageMode = Settings.UltraRageMode or false
 Settings.GodRageMode = Settings.GodRageMode or false
+
+-- ★ NOVAS OPÇÕES DE TARGET ★
+Settings.TargetMode = Settings.TargetMode or "FOV" -- "FOV" ou "Closest"
+Settings.AimOutsideFOV = Settings.AimOutsideFOV or false -- Mira fora do FOV também
+Settings.AutoResetOnKill = Settings.AutoResetOnKill or true -- Reset automático após kill
+
+-- Silent Aim Settings
 Settings.SilentAim = Settings.SilentAim or false
 Settings.SilentFOV = Settings.SilentFOV or 500
 Settings.SilentHitChance = Settings.SilentHitChance or 100
 Settings.SilentHeadshotChance = Settings.SilentHeadshotChance or 100
 Settings.SilentPrediction = Settings.SilentPrediction or true
+
+-- Magic Bullet Settings
 Settings.MagicBullet = Settings.MagicBullet or false
 Settings.MagicBulletMethod = Settings.MagicBulletMethod or "Teleport"
 Settings.MagicBulletSpeed = Settings.MagicBulletSpeed or 9999
 Settings.MagicBulletIgnoreWalls = Settings.MagicBulletIgnoreWalls or true
 Settings.MagicBulletAutoHit = Settings.MagicBulletAutoHit or true
+
+-- Trigger Bot Settings
 Settings.TriggerBot = Settings.TriggerBot or false
 Settings.TriggerFOV = Settings.TriggerFOV or 50
 Settings.TriggerDelay = Settings.TriggerDelay or 0.05
 Settings.TriggerBurst = Settings.TriggerBurst or false
 Settings.TriggerBurstCount = Settings.TriggerBurstCount or 3
 Settings.TriggerHeadOnly = Settings.TriggerHeadOnly or false
+
+-- Auto Fire/Switch
 Settings.AutoFire = Settings.AutoFire or false
 Settings.AutoSwitch = Settings.AutoSwitch or false
 Settings.TargetSwitchDelay = Settings.TargetSwitchDelay or 0.05
 Settings.InstantKill = Settings.InstantKill or false
+
+-- Aim Settings
 Settings.MultiPartAim = Settings.MultiPartAim or false
 Settings.AimParts = Settings.AimParts or {"Head", "UpperTorso", "HumanoidRootPart"}
 Settings.IgnoreWalls = Settings.IgnoreWalls or false
@@ -73,17 +88,17 @@ Settings.AntiAimDetection = Settings.AntiAimDetection or false
 Settings.ShakeReduction = Settings.ShakeReduction or 0
 Settings.AimbotFOV = Settings.AimbotFOV or 180
 Settings.MaxDistance = Settings.MaxDistance or 2000
-Settings.UpdateRate = Settings.UpdateRate or 0 -- 0 = máximo, >0 = limite de updates/seg
+Settings.UpdateRate = Settings.UpdateRate or 0
 Settings.ThreadedAim = Settings.ThreadedAim or true
 
 -- ============================================================================
--- UTILITY FUNCTIONS (OTIMIZADAS)
+-- UTILITY FUNCTIONS
 -- ============================================================================
 local CameraCache = {ref = nil, lastUpdate = 0}
 
 local function GetCamera()
     local now = tick()
-    if now - CameraCache.lastUpdate > 0.1 or not CameraCache.ref then
+    if now - CameraCache.lastUpdate > 0.05 or not CameraCache.ref then
         CameraCache.ref = workspace.CurrentCamera
         CameraCache.lastUpdate = now
     end
@@ -106,14 +121,36 @@ local function RandomChance(percent)
     return mathRandom(1, 100) <= percent
 end
 
--- Distância ao quadrado (evita sqrt)
 local function DistanceSquared(pos1, pos2)
     local delta = pos1 - pos2
     return delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
 end
 
+-- ★ NOVO: Validação de posição (evita mirar no chão)
+local function IsValidAimPosition(position)
+    if not position then return false end
+    if typeof(position) ~= "Vector3" then return false end
+    
+    -- Verifica se a posição é muito baixa (provavelmente chão)
+    local Camera = GetCamera()
+    if Camera then
+        local camY = Camera.CFrame.Position.Y
+        -- Se a posição está mais de 50 studs abaixo da câmera, provavelmente é inválida
+        if position.Y < camY - 50 then
+            return false
+        end
+    end
+    
+    -- Verifica valores NaN ou infinitos
+    if position.X ~= position.X or position.Y ~= position.Y or position.Z ~= position.Z then
+        return false
+    end
+    
+    return true
+end
+
 -- ============================================================================
--- RAYCAST PARAMS (CACHE)
+-- RAYCAST PARAMS
 -- ============================================================================
 local RayParams = RaycastParams.new()
 RayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -122,7 +159,7 @@ local RayParamsLastUpdate = 0
 
 local function UpdateRayParams()
     local now = tick()
-    if now - RayParamsLastUpdate < 0.5 then return end -- Atualiza no máximo 2x por segundo
+    if now - RayParamsLastUpdate < 0.5 then return end
     RayParamsLastUpdate = now
     
     local filter = {GetCamera()}
@@ -140,19 +177,18 @@ end)
 UpdateRayParams()
 
 -- ============================================================================
--- VISIBILITY CACHE (OTIMIZADO - MaxAge aumentado)
+-- VISIBILITY CACHE
 -- ============================================================================
 local VisibilityCache = {
     Data = {},
     Frame = 0,
-    MaxAge = 4, -- OTIMIZAÇÃO: Aumentado de 1 para 4 frames
-    CleanupInterval = 5, -- Limpa a cada 5 frames
+    MaxAge = 4,
+    CleanupInterval = 5,
 }
 
 function VisibilityCache:NextFrame()
     self.Frame = self.Frame + 1
     
-    -- Cleanup menos frequente
     if self.Frame % self.CleanupInterval == 0 then
         local toRemove = {}
         local maxAge = self.MaxAge
@@ -187,11 +223,15 @@ function VisibilityCache:Clear()
     self.Frame = 0
 end
 
+function VisibilityCache:Invalidate(player)
+    self.Data[player] = nil
+end
+
 -- ============================================================================
--- PART CACHE (NOVO - Evita FindFirstChild repetido)
+-- PART CACHE
 -- ============================================================================
-local PartCache = {} -- PartCache[player] = {Head = part, UpperTorso = part, ...}
-local PartCacheTime = {} -- Timestamp do cache
+local PartCache = {}
+local PartCacheTime = {}
 
 local PART_NAMES = {
     "Head", "UpperTorso", "Torso", "HumanoidRootPart", "LowerTorso",
@@ -215,7 +255,6 @@ local function BuildPartCacheFor(player)
         end
     end
     
-    -- Cache humanoid e anchor também
     map._humanoid = char:FindFirstChildOfClass("Humanoid")
     map._anchor = map.HumanoidRootPart or map.Torso or map.Head
     map._model = char
@@ -237,6 +276,22 @@ local function InvalidatePartCache(player)
     PartCacheTime[player] = nil
 end
 
+-- ★ NOVO: Verifica se o cache ainda é válido
+local function IsPartCacheValid(player)
+    local cache = PartCache[player]
+    if not cache then return false end
+    
+    local anchor = cache._anchor
+    if not anchor then return false end
+    if not anchor.Parent then return false end
+    if not anchor:IsDescendantOf(workspace) then return false end
+    
+    local humanoid = cache._humanoid
+    if humanoid and humanoid.Health <= 0 then return false end
+    
+    return true
+end
+
 -- Setup part cache listeners
 Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function()
@@ -245,9 +300,9 @@ Players.PlayerAdded:Connect(function(player)
     end)
     player.CharacterRemoving:Connect(function()
         InvalidatePartCache(player)
+        VisibilityCache:Invalidate(player)
     end)
     
-    -- Build cache se já tem character
     if player.Character then
         BuildPartCacheFor(player)
     end
@@ -255,9 +310,9 @@ end)
 
 Players.PlayerRemoving:Connect(function(player)
     InvalidatePartCache(player)
+    VisibilityCache:Invalidate(player)
 end)
 
--- Build cache para jogadores existentes
 for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer and player.Character then
         BuildPartCacheFor(player)
@@ -269,14 +324,15 @@ for _, player in ipairs(Players:GetPlayers()) do
     end)
     player.CharacterRemoving:Connect(function()
         InvalidatePartCache(player)
+        VisibilityCache:Invalidate(player)
     end)
 end
 
 -- ============================================================================
--- PLAYER DATA HELPER (OTIMIZADO COM PART CACHE)
+-- PLAYER DATA HELPER
 -- ============================================================================
 local PlayerDataCache = {}
-local PLAYER_DATA_CACHE_TTL = 0.15 -- 150ms
+local PLAYER_DATA_CACHE_TTL = 0.1
 
 local function GetPlayerData(player)
     if not player then return nil end
@@ -285,26 +341,36 @@ local function GetPlayerData(player)
     local cached = PlayerDataCache[player]
     
     if cached and (now - cached.time) < PLAYER_DATA_CACHE_TTL then
-        return cached.data
+        -- ★ FIX: Revalida se ainda é válido
+        if cached.data and cached.data.isValid then
+            local anchor = cached.data.anchor
+            if anchor and anchor.Parent and anchor:IsDescendantOf(workspace) then
+                local hum = cached.data.humanoid
+                if not hum or hum.Health > 0 then
+                    return cached.data
+                end
+            end
+        end
+        -- Cache inválido, limpa
+        PlayerDataCache[player] = nil
     end
     
     -- Usa PartCache primeiro
-    local partCache = PartCache[player]
-    if partCache then
+    if IsPartCacheValid(player) then
+        local partCache = PartCache[player]
         local anchor = partCache._anchor
-        if anchor and anchor:IsDescendantOf(workspace) then
-            local humanoid = partCache._humanoid
-            local data = {
-                isValid = true,
-                model = partCache._model,
-                anchor = anchor,
-                humanoid = humanoid,
-                health = humanoid and humanoid.Health or 100,
-                maxHealth = humanoid and humanoid.MaxHealth or 100,
-            }
-            PlayerDataCache[player] = {data = data, time = now}
-            return data
-        end
+        local humanoid = partCache._humanoid
+        
+        local data = {
+            isValid = true,
+            model = partCache._model,
+            anchor = anchor,
+            humanoid = humanoid,
+            health = humanoid and humanoid.Health or 100,
+            maxHealth = humanoid and humanoid.MaxHealth or 100,
+        }
+        PlayerDataCache[player] = {data = data, time = now}
+        return data
     end
     
     -- Fallback para SemanticEngine
@@ -312,8 +378,13 @@ local function GetPlayerData(player)
     if SemanticEngine and SemanticEngine.GetCachedPlayerData then
         local data = SemanticEngine:GetCachedPlayerData(player)
         if data and data.isValid then 
-            PlayerDataCache[player] = {data = data, time = now}
-            return data 
+            -- ★ FIX: Valida antes de cachear
+            if data.anchor and data.anchor.Parent and data.anchor:IsDescendantOf(workspace) then
+                if not data.humanoid or data.humanoid.Health > 0 then
+                    PlayerDataCache[player] = {data = data, time = now}
+                    return data
+                end
+            end
         end
     end
     
@@ -325,9 +396,17 @@ local function GetPlayerData(player)
                 or character:FindFirstChild("Torso")
                 or character:FindFirstChild("Head")
     
-    if not anchor or not anchor:IsDescendantOf(workspace) then return nil end
+    if not anchor or not anchor.Parent or not anchor:IsDescendantOf(workspace) then 
+        return nil 
+    end
     
     local humanoid = character:FindFirstChildOfClass("Humanoid")
+    
+    -- ★ FIX: Não retorna dados de jogadores mortos
+    if humanoid and humanoid.Health <= 0 then
+        return nil
+    end
+    
     local data = {
         isValid = true,
         model = character,
@@ -338,22 +417,27 @@ local function GetPlayerData(player)
     }
     
     PlayerDataCache[player] = {data = data, time = now}
-    
-    -- Rebuild part cache
     BuildPartCacheFor(player)
     
     return data
 end
 
-Players.PlayerRemoving:Connect(function(player)
+-- ★ NOVO: Invalida cache de player
+local function InvalidatePlayerData(player)
     PlayerDataCache[player] = nil
+    InvalidatePartCache(player)
+    VisibilityCache:Invalidate(player)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+    InvalidatePlayerData(player)
 end)
 
 -- ============================================================================
--- TEAM CHECK (CACHE)
+-- TEAM CHECK
 -- ============================================================================
 local TeamCache = {}
-local TEAM_CACHE_TTL = 1 -- 1 segundo
+local TEAM_CACHE_TTL = 1
 
 local function AreSameTeam(player1, player2)
     if not player1 or not player2 then return false end
@@ -387,7 +471,7 @@ local function AreSameTeam(player1, player2)
 end
 
 -- ============================================================================
--- GET AIM PART (OTIMIZADO COM PART CACHE)
+-- GET AIM PART
 -- ============================================================================
 local PartPriorityMap = {
     Head = 1,
@@ -420,47 +504,54 @@ local function GetAimPart(player, partName)
     local data = GetPlayerData(player)
     if not data or not data.model then return nil end
     
+    -- ★ FIX: Valida que o model ainda existe
+    if not data.model.Parent then return nil end
+    
     partName = partName or "Head"
     if type(partName) == "table" then
         partName = partName[1] or "Head"
     end
     
-    -- Tenta do PartCache primeiro
     local partCache = PartCache[player]
     if partCache then
         local candidates = PART_MAP[partName] or {partName}
         for i = 1, #candidates do
             local part = partCache[candidates[i]]
-            if part then return part end
+            if part and part.Parent then 
+                return part 
+            end
         end
     end
     
-    -- Fallback
     local candidates = PART_MAP[partName] or {partName}
     local model = data.model
     
     for i = 1, #candidates do
         local part = model:FindFirstChild(candidates[i], true)
-        if part and part:IsA("BasePart") then
+        if part and part:IsA("BasePart") and part.Parent then
             return part
         end
     end
     
-    return data.anchor
+    -- ★ FIX: Valida anchor antes de retornar
+    if data.anchor and data.anchor.Parent then
+        return data.anchor
+    end
+    
+    return nil
 end
 
 -- ============================================================================
--- MULTI-PART AIM SYSTEM (OTIMIZADO)
+-- MULTI-PART AIM SYSTEM
 -- ============================================================================
 local function GetAllAimParts(player)
-    local partCache = PartCache[player]
-    if not partCache then
+    if not IsPartCacheValid(player) then
         local data = GetPlayerData(player)
         if not data or not data.model then return {} end
         BuildPartCacheFor(player)
-        partCache = PartCache[player]
     end
     
+    local partCache = PartCache[player]
     if not partCache then return {} end
     
     local parts = {}
@@ -473,7 +564,7 @@ local function GetAllAimParts(player)
     for i = 1, #partsToFind do
         local partName = partsToFind[i]
         local part = partCache[partName]
-        if part then
+        if part and part.Parent then
             parts[#parts + 1] = {
                 part = part,
                 name = partName,
@@ -487,15 +578,14 @@ local function GetAllAimParts(player)
     return parts
 end
 
--- GetBestAimPart com menos raycasts
 local function GetBestAimPart(player, ignoreFOV)
     local data = GetPlayerData(player)
     if not data or not data.model then return nil end
+    if not data.model.Parent then return nil end
     
-    -- Em Ultra/God Rage, sempre retorna a cabeça primeiro
     if Settings.GodRageMode or Settings.UltraRageMode then
         local head = GetAimPart(player, "Head")
-        if head then return head end
+        if head and head.Parent then return head end
     end
     
     if not Settings.MultiPartAim then
@@ -507,13 +597,12 @@ local function GetBestAimPart(player, ignoreFOV)
     local mousePos = UserInputService:GetMouseLocation()
     
     local bestPart = nil
-    local bestScore = math.huge
+    local bestScore = mathHuge
     
     local allParts = GetAllAimParts(player)
     local maxPartsToCheck = Settings.GodRageMode and 1 or (Settings.RageMode and 3 or 5)
     local checked = 0
     
-    -- Prelocaliza WorldToViewportPoint
     local WorldToViewportPoint = Camera.WorldToViewportPoint
     
     for i = 1, #allParts do
@@ -521,9 +610,12 @@ local function GetBestAimPart(player, ignoreFOV)
         
         local partData = allParts[i]
         local part = partData.part
+        
+        if not part or not part.Parent then continue end
+        
         local screenPos, onScreen = WorldToViewportPoint(Camera, part.Position)
         
-        if onScreen or Settings.GodRageMode then
+        if onScreen or Settings.GodRageMode or Settings.AimOutsideFOV then
             local distToMouse = onScreen and (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude or 9999
             local score = distToMouse + (partData.priority * 20)
             
@@ -532,10 +624,8 @@ local function GetBestAimPart(player, ignoreFOV)
             end
             
             if score < bestScore then
-                -- Verifica visibilidade apenas se necessário
                 local visible = true
                 if not Settings.IgnoreWalls and not Settings.MagicBullet and not Settings.GodRageMode then
-                    -- Usa cache de visibilidade
                     local cachedVis, _, hit = VisibilityCache:Get(player)
                     if hit then
                         visible = cachedVis
@@ -559,21 +649,24 @@ local function GetBestAimPart(player, ignoreFOV)
         end
     end
     
-    return bestPart or GetAimPart(player, Settings.AimPart)
+    if not bestPart or not bestPart.Parent then
+        return GetAimPart(player, Settings.AimPart)
+    end
+    
+    return bestPart
 end
 
 -- ============================================================================
--- ULTRA PREDICTION SYSTEM (OTIMIZADO)
+-- PREDICTION SYSTEM
 -- ============================================================================
 local PredictionHistory = {}
-local LastPredUpdate = {} -- OTIMIZAÇÃO: Throttle de updates
-local MAX_HISTORY = 8 -- Reduzido de 12
-local PRED_UPDATE_INTERVAL = 1/30 -- 30Hz max
+local LastPredUpdate = {}
+local MAX_HISTORY = 8
+local PRED_UPDATE_INTERVAL = 1/30
 
 local function UpdatePredictionHistory(player, position, velocity)
     local now = tick()
     
-    -- Throttle: só atualiza a cada 33ms (30Hz)
     if LastPredUpdate[player] and (now - LastPredUpdate[player]) < PRED_UPDATE_INTERVAL then
         return
     end
@@ -598,14 +691,19 @@ local function UpdatePredictionHistory(player, position, velocity)
     end
 end
 
+local function ClearPredictionHistory(player)
+    PredictionHistory[player] = nil
+    LastPredUpdate[player] = nil
+end
+
 local function CalculateVelocity(player, anchor)
-    -- Método 1: Propriedade direta (mais rápido)
+    if not anchor or not anchor.Parent then return Vector3.zero end
+    
     local vel = anchor.AssemblyLinearVelocity or anchor.Velocity
     if vel and vel.Magnitude > 0.5 then 
         return vel 
     end
     
-    -- Método 2: Cálculo por histórico
     local history = PredictionHistory[player]
     if history and #history.positions >= 2 then
         local newest = history.positions[#history.positions]
@@ -641,8 +739,14 @@ end
 
 local function PredictPosition(player, targetPart)
     if not targetPart then return nil end
+    if not targetPart.Parent then return nil end
     
     local basePos = targetPart.Position
+    
+    -- ★ FIX: Valida posição base
+    if not IsValidAimPosition(basePos) then
+        return nil
+    end
     
     if not Settings.UsePrediction then
         return basePos
@@ -651,6 +755,10 @@ local function PredictPosition(player, targetPart)
     local data = GetPlayerData(player)
     if not data or not data.anchor then
         return basePos
+    end
+    
+    if not data.anchor.Parent then
+        return nil
     end
     
     local velocity = CalculateVelocity(player, data.anchor)
@@ -667,7 +775,6 @@ local function PredictPosition(player, targetPart)
     end
     
     local Camera = GetCamera()
-    -- Usa distância ao quadrado para evitar sqrt
     local distSq = DistanceSquared(targetPart.Position, Camera.CFrame.Position)
     local distance = mathSqrt(distSq)
     
@@ -689,13 +796,18 @@ local function PredictPosition(player, targetPart)
         predictedPos = predictedPos + (acceleration * 0.5 * timeToTarget * timeToTarget)
     end
     
+    -- ★ FIX: Valida posição predita
+    if not IsValidAimPosition(predictedPos) then
+        return basePos
+    end
+    
     UpdatePredictionHistory(player, data.anchor.Position, velocity)
     
     return predictedPos
 end
 
 -- ============================================================================
--- VISIBILITY CHECK (OTIMIZADO COM CACHE)
+-- VISIBILITY CHECK
 -- ============================================================================
 local function IsVisible(player, targetPart)
     if Settings.MagicBullet or Settings.IgnoreWalls or Settings.GodRageMode then
@@ -706,7 +818,6 @@ local function IsVisible(player, targetPart)
         return true
     end
     
-    -- Usa cache
     local cached, cachedPart, hit = VisibilityCache:Get(player)
     if hit then 
         return cached 
@@ -735,36 +846,74 @@ local function IsVisible(player, targetPart)
 end
 
 -- ============================================================================
--- TARGET LOCK SYSTEM (ULTRA RAGE)
+-- TARGET LOCK SYSTEM (MELHORADO)
 -- ============================================================================
 local TargetLock = {
     CurrentTarget = nil,
     LockTime = 0,
-    LastScore = math.huge,
+    LastScore = mathHuge,
     LastKill = 0,
     KillCount = 0,
     MinLockDuration = 0.05,
     MaxLockDuration = 0.5,
     ImprovementThreshold = 0.4,
+    LastValidPosition = nil, -- ★ NOVO: Última posição válida
+    DeathDetected = false, -- ★ NOVO: Flag de morte detectada
 }
 
 function TargetLock:Reset()
+    -- ★ FIX: Limpa tudo ao resetar
+    if self.CurrentTarget then
+        ClearPredictionHistory(self.CurrentTarget)
+        VisibilityCache:Invalidate(self.CurrentTarget)
+    end
+    
     self.CurrentTarget = nil
     self.LockTime = 0
-    self.LastScore = math.huge
+    self.LastScore = mathHuge
+    self.LastValidPosition = nil
+    self.DeathDetected = false
+end
+
+-- ★ NOVO: Verifica se alvo está vivo
+function TargetLock:IsTargetAlive()
+    if not self.CurrentTarget then return false end
+    
+    local data = GetPlayerData(self.CurrentTarget)
+    if not data then return false end
+    if not data.isValid then return false end
+    if not data.anchor or not data.anchor.Parent then return false end
+    
+    if data.humanoid then
+        if data.humanoid.Health <= 0 then
+            return false
+        end
+    end
+    
+    return true
 end
 
 function TargetLock:IsValid()
     if not self.CurrentTarget then return false end
     
-    local data = GetPlayerData(self.CurrentTarget)
-    if not data or not data.isValid then return false end
-    
-    if data.humanoid and data.humanoid.Health <= 0 then
-        self.KillCount = self.KillCount + 1
-        self.LastKill = tick()
+    -- ★ FIX: Verifica se está vivo primeiro
+    if not self:IsTargetAlive() then
+        if not self.DeathDetected then
+            self.DeathDetected = true
+            self.KillCount = self.KillCount + 1
+            self.LastKill = tick()
+            
+            if Notify and Settings.AutoResetOnKill then
+                -- Notifica kill
+            end
+        end
         return false
     end
+    
+    self.DeathDetected = false
+    
+    local data = GetPlayerData(self.CurrentTarget)
+    if not data or not data.isValid then return false end
     
     local Camera = GetCamera()
     local distSq = DistanceSquared(data.anchor.Position, Camera.CFrame.Position)
@@ -780,11 +929,19 @@ function TargetLock:IsValid()
     
     if distSq > maxDist * maxDist then return false end
     
+    -- ★ NOVO: Atualiza última posição válida
+    self.LastValidPosition = data.anchor.Position
+    
     return true
 end
 
 function TargetLock:TryLock(candidate, score)
     if not candidate then return end
+    
+    -- ★ FIX: Verifica se o candidato está vivo
+    local data = GetPlayerData(candidate)
+    if not data or not data.isValid then return end
+    if data.humanoid and data.humanoid.Health <= 0 then return end
     
     local now = tick()
     
@@ -809,6 +966,7 @@ function TargetLock:TryLock(candidate, score)
         self.CurrentTarget = candidate
         self.LockTime = now
         self.LastScore = score
+        self.DeathDetected = false
         return
     end
     
@@ -821,6 +979,7 @@ function TargetLock:TryLock(candidate, score)
         self.CurrentTarget = candidate
         self.LockTime = now
         self.LastScore = score
+        self.DeathDetected = false
         return
     end
     
@@ -830,6 +989,7 @@ function TargetLock:TryLock(candidate, score)
         self.CurrentTarget = candidate
         self.LockTime = now
         self.LastScore = score
+        self.DeathDetected = false
         return
     end
     
@@ -837,6 +997,7 @@ function TargetLock:TryLock(candidate, score)
         self.CurrentTarget = candidate
         self.LockTime = now
         self.LastScore = score
+        self.DeathDetected = false
         return
     end
     
@@ -844,6 +1005,7 @@ function TargetLock:TryLock(candidate, score)
         self.CurrentTarget = candidate
         self.LockTime = now
         self.LastScore = score
+        self.DeathDetected = false
     end
 end
 
@@ -856,7 +1018,7 @@ function TargetLock:GetTarget()
 end
 
 -- ============================================================================
--- AIM CONTROLLER (ULTRA VERSION)
+-- AIM CONTROLLER
 -- ============================================================================
 local AimController = {
     IsAiming = false,
@@ -866,6 +1028,7 @@ local AimController = {
     AimHistory = {},
     MaxHistory = 5,
     SmoothHistory = {},
+    LastValidAimPos = nil, -- ★ NOVO
 }
 
 function AimController:DetectMethods()
@@ -883,6 +1046,7 @@ function AimController:StopAiming()
     self.IsAiming = false
     self.OriginalCFrame = nil
     self.LastAimPos = nil
+    self.LastValidAimPos = nil
     self.AimHistory = {}
     self.SmoothHistory = {}
     
@@ -940,7 +1104,22 @@ function AimController:ApplyShakeReduction(targetPos)
 end
 
 function AimController:ApplyAim(targetPosition, smoothing)
-    if not targetPosition then return false end
+    -- ★ FIX: Validação rigorosa da posição
+    if not targetPosition then 
+        return false 
+    end
+    
+    if not IsValidAimPosition(targetPosition) then
+        -- Tenta usar última posição válida
+        if self.LastValidAimPos and IsValidAimPosition(self.LastValidAimPos) then
+            targetPosition = self.LastValidAimPos
+        else
+            return false
+        end
+    end
+    
+    -- ★ NOVO: Salva última posição válida
+    self.LastValidAimPos = targetPosition
     
     local Camera = GetCamera()
     if not Camera then return false end
@@ -1010,7 +1189,9 @@ function AimController:Method_MouseMoveRel(targetPosition, smoothFactor)
         local Camera = GetCamera()
         local screenPos, onScreen = Camera:WorldToViewportPoint(targetPosition)
         
-        if not onScreen and not Settings.GodRageMode then return end
+        if not onScreen and not Settings.GodRageMode and not Settings.AimOutsideFOV then 
+            return 
+        end
         
         local viewport = Camera.ViewportSize
         local centerX = viewport.X / 2
@@ -1039,7 +1220,7 @@ function AimController:Method_MouseMoveRel(targetPosition, smoothFactor)
 end
 
 -- ============================================================================
--- SILENT AIM SYSTEM (OTIMIZADO)
+-- SILENT AIM SYSTEM
 -- ============================================================================
 local SilentAim = {
     Enabled = false,
@@ -1050,7 +1231,6 @@ local SilentAim = {
     Initialized = false,
 }
 
--- Keywords pré-computadas como set (O(1) lookup)
 local WEAPON_KEYWORDS_SET = {
     shoot = true, fire = true, bullet = true, gun = true, 
     weapon = true, damage = true, hit = true, attack = true
@@ -1074,19 +1254,30 @@ function SilentAim:GetTargetPosition()
     
     if not target then return nil end
     
+    -- ★ FIX: Verifica se alvo está vivo
+    local data = GetPlayerData(target)
+    if not data or not data.isValid then return nil end
+    if data.humanoid and data.humanoid.Health <= 0 then return nil end
+    
     self.LastTarget = target
     
     local aimPart = GetBestAimPart(target, true)
-    if not aimPart then return nil end
+    if not aimPart or not aimPart.Parent then return nil end
     
     if Settings.SilentHeadshotChance < 100 then
         if not RandomChance(Settings.SilentHeadshotChance) then
             local torso = GetAimPart(target, "UpperTorso")
-            if torso then aimPart = torso end
+            if torso and torso.Parent then aimPart = torso end
         end
     end
     
     local pos = PredictPosition(target, aimPart)
+    
+    -- ★ FIX: Valida posição
+    if not pos or not IsValidAimPosition(pos) then
+        return nil
+    end
+    
     self.LastAimPos = pos
     return pos
 end
@@ -1097,7 +1288,7 @@ function SilentAim:IsInFOV(position)
     local Camera = GetCamera()
     local screenPos, onScreen = Camera:WorldToViewportPoint(position)
     
-    if not onScreen then return Settings.UltraRageMode end
+    if not onScreen then return Settings.UltraRageMode or Settings.AimOutsideFOV end
     
     local mousePos = UserInputService:GetMouseLocation()
     local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
@@ -1123,7 +1314,6 @@ function SilentAim:Initialize()
     if self.Initialized then return end
     self.Initialized = true
     
-    -- Método 1: Hook via metatable
     SafeCall(function()
         if type(getrawmetatable) ~= "function" then return end
         
@@ -1175,7 +1365,6 @@ function SilentAim:Initialize()
         end
     end, "SilentAim:InitializeNamecall")
     
-    -- Método 2: Hook via Remote Events (OTIMIZADO - containers específicos)
     SafeCall(function()
         if type(hookfunction) ~= "function" then return end
         
@@ -1213,7 +1402,6 @@ function SilentAim:Initialize()
             end
         end
         
-        -- OTIMIZAÇÃO: Scan apenas containers específicos
         local containers = {workspace, game:GetService("ReplicatedStorage")}
         for _, container in ipairs(containers) do
             pcall(function()
@@ -1223,7 +1411,6 @@ function SilentAim:Initialize()
             end)
         end
         
-        -- OTIMIZAÇÃO: Filtro rápido em DescendantAdded
         game.DescendantAdded:Connect(function(desc)
             if not (desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction")) then return end
             if not IsWeaponRemote(desc.Name) then return end
@@ -1245,7 +1432,7 @@ function SilentAim:Disable()
 end
 
 -- ============================================================================
--- MAGIC BULLET SYSTEM (OTIMIZADO - Heartbeat único)
+-- MAGIC BULLET SYSTEM
 -- ============================================================================
 local MagicBullet = {
     Enabled = false,
@@ -1254,7 +1441,6 @@ local MagicBullet = {
     Initialized = false,
 }
 
--- OTIMIZAÇÃO: Tabela fraca para projéteis + Heartbeat único
 local TrackedProjectiles = setmetatable({}, {__mode = "k"})
 local ProjectileHeartbeatConnection = nil
 
@@ -1282,11 +1468,16 @@ local function ProcessProjectiles()
     local target = TargetLock:GetTarget()
     if not target then return end
     
+    -- ★ FIX: Verifica se alvo está vivo
+    local data = GetPlayerData(target)
+    if not data or not data.isValid then return end
+    if data.humanoid and data.humanoid.Health <= 0 then return end
+    
     local aimPart = GetBestAimPart(target)
-    if not aimPart then return end
+    if not aimPart or not aimPart.Parent then return end
     
     local targetPos = PredictPosition(target, aimPart)
-    if not targetPos then return end
+    if not targetPos or not IsValidAimPosition(targetPos) then return end
     
     for proj, _ in pairs(TrackedProjectiles) do
         if not proj or not proj.Parent then
@@ -1310,12 +1501,10 @@ function MagicBullet:Initialize()
     if self.Initialized then return end
     self.Initialized = true
     
-    -- OTIMIZAÇÃO: Heartbeat único para todos os projéteis
     if not ProjectileHeartbeatConnection then
         ProjectileHeartbeatConnection = RunService.Heartbeat:Connect(ProcessProjectiles)
     end
     
-    -- Monitor novos projéteis
     workspace.DescendantAdded:Connect(function(desc)
         if not desc:IsA("BasePart") then return end
         if not IsBullet(desc.Name) then return end
@@ -1323,13 +1512,12 @@ function MagicBullet:Initialize()
         TrackProjectile(desc)
     end)
     
-    -- Hook remotes (reutiliza do SilentAim se possível)
     SafeCall(function()
         if type(hookfunction) ~= "function" then return end
         
         local function HookWeaponRemote(remote)
             if not remote:IsA("RemoteEvent") then return end
-            if SilentAim.Hooks[remote] then return end -- Já hookado
+            if SilentAim.Hooks[remote] then return end
             if MagicBullet.BulletHooks[remote] then return end
             if not IsWeaponRemote(remote.Name) then return end
             
@@ -1341,28 +1529,30 @@ function MagicBullet:Initialize()
                     local target = TargetLock:GetTarget()
                     if target then
                         local aimPart = GetBestAimPart(target)
-                        if aimPart then
+                        if aimPart and aimPart.Parent then
                             local targetPos = PredictPosition(target, aimPart)
-                            local args = {...}
-                            
-                            for i, arg in ipairs(args) do
-                                if typeof(arg) == "Vector3" then
-                                    args[i] = targetPos
-                                elseif typeof(arg) == "CFrame" then
-                                    args[i] = CFrame.lookAt(arg.Position, targetPos)
-                                elseif typeof(arg) == "Ray" then
-                                    args[i] = Ray.new(arg.Origin, (targetPos - arg.Origin).Unit * 5000)
-                                elseif type(arg) == "table" then
-                                    if arg.Position then arg.Position = targetPos end
-                                    if arg.EndPos then arg.EndPos = targetPos end
-                                    if arg.HitPos then arg.HitPos = targetPos end
-                                    if arg.Origin and arg.Direction then
-                                        arg.Direction = (targetPos - arg.Origin).Unit * 5000
+                            if targetPos and IsValidAimPosition(targetPos) then
+                                local args = {...}
+                                
+                                for i, arg in ipairs(args) do
+                                    if typeof(arg) == "Vector3" then
+                                        args[i] = targetPos
+                                    elseif typeof(arg) == "CFrame" then
+                                        args[i] = CFrame.lookAt(arg.Position, targetPos)
+                                    elseif typeof(arg) == "Ray" then
+                                        args[i] = Ray.new(arg.Origin, (targetPos - arg.Origin).Unit * 5000)
+                                    elseif type(arg) == "table" then
+                                        if arg.Position then arg.Position = targetPos end
+                                        if arg.EndPos then arg.EndPos = targetPos end
+                                        if arg.HitPos then arg.HitPos = targetPos end
+                                        if arg.Origin and arg.Direction then
+                                            arg.Direction = (targetPos - arg.Origin).Unit * 5000
+                                        end
                                     end
                                 end
+                                
+                                return oldFire(self, unpack(args))
                             end
-                            
-                            return oldFire(self, unpack(args))
                         end
                     end
                 end
@@ -1370,7 +1560,6 @@ function MagicBullet:Initialize()
             end
         end
         
-        -- OTIMIZAÇÃO: Scan apenas containers específicos
         local containers = {workspace, game:GetService("ReplicatedStorage")}
         for _, container in ipairs(containers) do
             pcall(function()
@@ -1439,7 +1628,7 @@ function TriggerBot:GetTargetInFOV()
         if Settings.IgnoreTeamAimbot and AreSameTeam(LocalPlayer, player) then continue end
         
         local targetPart = Settings.TriggerHeadOnly and GetAimPart(player, "Head") or GetBestAimPart(player)
-        if not targetPart then continue end
+        if not targetPart or not targetPart.Parent then continue end
         
         local screenPos, onScreen = WorldToViewportPoint(Camera, targetPart.Position)
         if not onScreen then continue end
@@ -1566,11 +1755,11 @@ function AutoFire:TryFire()
 end
 
 -- ============================================================================
--- TARGET FINDER (ULTRA OTIMIZADO)
+-- TARGET FINDER (COM TARGET MODE)
 -- ============================================================================
 local CachedPlayers = {}
 local LastPlayerCacheUpdate = 0
-local PLAYER_CACHE_TTL = 0.5
+local PLAYER_CACHE_TTL = 0.3
 
 local function GetCachedPlayers()
     local now = tick()
@@ -1581,14 +1770,18 @@ local function GetCachedPlayers()
     return CachedPlayers
 end
 
+-- ★ NOVA FUNÇÃO: FindBestTarget com Target Mode
 local function FindBestTarget()
     local Camera = GetCamera()
-    if not Camera then return nil, math.huge end
+    if not Camera then return nil, mathHuge end
     
     local camPos = Camera.CFrame.Position
     local camLook = Camera.CFrame.LookVector
     local mousePos = UserInputService:GetMouseLocation()
     local WorldToViewportPoint = Camera.WorldToViewportPoint
+    
+    -- ★ NOVO: Pega o modo de target
+    local targetMode = Settings.TargetMode or "FOV" -- "FOV" ou "Closest"
     
     local currentFOV = Settings.AimbotFOV or 180
     if Settings.GodRageMode then
@@ -1619,47 +1812,69 @@ local function FindBestTarget()
         
         local data = GetPlayerData(player)
         if not data or not data.isValid or not data.anchor then continue end
-        if not data.anchor:IsDescendantOf(workspace) then continue end
+        if not data.anchor.Parent or not data.anchor:IsDescendantOf(workspace) then continue end
+        
+        -- ★ FIX: Verifica se está vivo
         if data.humanoid and data.humanoid.Health <= 0 then continue end
         
         if Settings.IgnoreTeamAimbot and AreSameTeam(LocalPlayer, player) then continue end
         
-        -- OTIMIZAÇÃO: Usa distância ao quadrado
         local distSq = DistanceSquared(data.anchor.Position, camPos)
         if distSq > maxDistSq then continue end
         
         local screenPos, onScreen = WorldToViewportPoint(Camera, data.anchor.Position)
         
-        if not Settings.GodRageMode and not Settings.UltraRageMode and not onScreen then continue end
+        -- ★ NOVO: AimOutsideFOV permite mirar em alvos fora da tela
+        local allowOutside = Settings.GodRageMode or Settings.UltraRageMode or Settings.AimOutsideFOV
+        if not allowOutside and not onScreen then continue end
         
         local distToMouse = onScreen and (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude or 99999
         local distToMouseSq = distToMouse * distToMouse
         
-        if not Settings.GodRageMode and Settings.UseAimbotFOV and distToMouseSq > currentFOVSq then continue end
+        -- ★ NOVO: Se AimOutsideFOV está ativo, não checa FOV
+        local checkFOV = Settings.UseAimbotFOV and not Settings.AimOutsideFOV and not Settings.GodRageMode
+        if checkFOV and distToMouseSq > currentFOVSq then continue end
         
         local dirToTarget = (data.anchor.Position - camPos).Unit
         local dot = camLook:Dot(dirToTarget)
         
         local minDot = Settings.GodRageMode and -1 or (Settings.UltraRageMode and -0.5 or (Settings.RageMode and -0.2 or 0.1))
+        -- ★ NOVO: AimOutsideFOV permite mirar em qualquer direção
+        if Settings.AimOutsideFOV then
+            minDot = -1
+        end
         if dot < minDot then continue end
         
         local distance = mathSqrt(distSq)
         local score
         
-        if Settings.GodRageMode then
-            local healthPenalty = data.humanoid and (data.humanoid.Health / data.humanoid.MaxHealth) or 1
-            score = distance * 0.3 * healthPenalty
-        elseif Settings.UltraRageMode then
-            score = distance * 0.4 + distToMouse * 0.1
-        elseif Settings.RageMode then
-            score = distance * 0.3 + distToMouse * 0.4
+        -- ★ NOVO: Calcula score baseado no TargetMode
+        if targetMode == "Closest" then
+            -- Modo Closest: prioriza distância
+            score = distance
+            
+            -- Ainda considera saúde em rage modes
+            if (Settings.RageMode or Settings.UltraRageMode or Settings.GodRageMode) and data.humanoid then
+                local healthPercent = data.humanoid.Health / data.humanoid.MaxHealth
+                score = score * (0.3 + healthPercent * 0.7)
+            end
         else
-            score = distToMouse * 1.0 + distance * 0.15
-        end
-        
-        if (Settings.RageMode or Settings.UltraRageMode or Settings.GodRageMode) and data.humanoid then
-            local healthPercent = data.humanoid.Health / data.humanoid.MaxHealth
-            score = score * (0.3 + healthPercent * 0.7)
+            -- Modo FOV: prioriza proximidade ao mouse
+            if Settings.GodRageMode then
+                local healthPenalty = data.humanoid and (data.humanoid.Health / data.humanoid.MaxHealth) or 1
+                score = distance * 0.3 * healthPenalty
+            elseif Settings.UltraRageMode then
+                score = distance * 0.4 + distToMouse * 0.1
+            elseif Settings.RageMode then
+                score = distance * 0.3 + distToMouse * 0.4
+            else
+                score = distToMouse * 1.0 + distance * 0.15
+            end
+            
+            if (Settings.RageMode or Settings.UltraRageMode or Settings.GodRageMode) and data.humanoid then
+                local healthPercent = data.humanoid.Health / data.humanoid.MaxHealth
+                score = score * (0.3 + healthPercent * 0.7)
+            end
         end
         
         candidates[#candidates + 1] = {
@@ -1672,6 +1887,11 @@ local function FindBestTarget()
         }
     end
     
+    -- Se não encontrou candidatos e AimOutsideFOV está ativo, não retorna nil ainda
+    if #candidates == 0 then
+        return nil, mathHuge
+    end
+    
     tableSort(candidates, function(a, b) return a.score < b.score end)
     
     local maxChecks = Settings.GodRageMode and 1 or (Settings.UltraRageMode and 2 or (Settings.RageMode and 3 or 5))
@@ -1681,8 +1901,14 @@ local function FindBestTarget()
         if checked >= maxChecks then break end
         
         local candidate = candidates[i]
+        
+        -- ★ FIX: Revalida que ainda está vivo
+        local data = GetPlayerData(candidate.player)
+        if not data or not data.isValid then continue end
+        if data.humanoid and data.humanoid.Health <= 0 then continue end
+        
         local aimPart = GetBestAimPart(candidate.player)
-        if not aimPart then continue end
+        if not aimPart or not aimPart.Parent then continue end
         
         checked = checked + 1
         
@@ -1699,10 +1925,9 @@ local function FindBestTarget()
         return candidates[1].player, candidates[1].score
     end
     
-    return nil, math.huge
+    return nil, mathHuge
 end
 
--- FindBestTargetForSilent (mantido igual mas otimizado)
 local function FindBestTargetForSilent()
     local Camera = GetCamera()
     if not Camera then return nil end
@@ -1721,7 +1946,7 @@ local function FindBestTargetForSilent()
     end
     
     local bestTarget = nil
-    local bestScore = math.huge
+    local bestScore = mathHuge
     local allPlayers = GetCachedPlayers()
     
     for i = 1, #allPlayers do
@@ -1735,14 +1960,15 @@ local function FindBestTargetForSilent()
         if Settings.IgnoreTeamAimbot and AreSameTeam(LocalPlayer, player) then continue end
         
         local targetPart = GetBestAimPart(player)
-        if not targetPart then continue end
+        if not targetPart or not targetPart.Parent then continue end
         
         local screenPos, onScreen = WorldToViewportPoint(Camera, targetPart.Position)
         
-        if onScreen or Settings.GodRageMode then
+        local allowOutside = Settings.GodRageMode or Settings.AimOutsideFOV
+        if onScreen or allowOutside then
             local distToMouse = onScreen and (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude or 9999
             
-            if distToMouse <= silentFOV or Settings.GodRageMode then
+            if distToMouse <= silentFOV or Settings.GodRageMode or Settings.AimOutsideFOV then
                 local distSq = DistanceSquared(targetPart.Position, camPos)
                 local score = distToMouse + mathSqrt(distSq) * 0.1
                 
@@ -1798,11 +2024,10 @@ local Aimbot = {
     Initialized = false,
     Connection = nil,
     TriggerConnection = nil,
-    _lastUpdateTick = 0, -- Para throttling
+    _lastUpdateTick = 0,
 }
 
 function Aimbot:Update()
-    -- OTIMIZAÇÃO: Throttling baseado em Settings.UpdateRate
     local now = tick()
     local updateRate = Settings.UpdateRate or 0
     if updateRate > 0 then
@@ -1849,10 +2074,35 @@ function Aimbot:Update()
     local target = TargetLock:GetTarget()
     
     if target then
+        -- ★ FIX: Verifica se alvo ainda é válido
+        local data = GetPlayerData(target)
+        if not data or not data.isValid then
+            TargetLock:Reset()
+            AimController:StopAiming()
+            return
+        end
+        
+        if data.humanoid and data.humanoid.Health <= 0 then
+            TargetLock:Reset()
+            AimController:StopAiming()
+            return
+        end
+        
         local aimPart = GetBestAimPart(target)
         
-        if aimPart then
+        if aimPart and aimPart.Parent then
             local aimPos = PredictPosition(target, aimPart)
+            
+            -- ★ FIX: Valida posição antes de aplicar
+            if not aimPos or not IsValidAimPosition(aimPos) then
+                -- Tenta usar posição direta da parte
+                aimPos = aimPart.Position
+                if not IsValidAimPosition(aimPos) then
+                    TargetLock:Reset()
+                    AimController:StopAiming()
+                    return
+                end
+            end
             
             local baseSm = Settings.SmoothingFactor or 5
             local smoothing = baseSm
@@ -1864,16 +2114,12 @@ function Aimbot:Update()
             elseif Settings.RageMode then
                 smoothing = mathMin(baseSm, 1)
             elseif Settings.UseAdaptiveSmoothing then
-                local data = GetPlayerData(target)
-                if data and data.anchor then
-                    local Camera = GetCamera()
-                    local distSq = DistanceSquared(data.anchor.Position, Camera.CFrame.Position)
-                    
-                    if distSq < 2500 then -- 50^2
-                        smoothing = baseSm * 1.4
-                    elseif distSq > 90000 then -- 300^2
-                        smoothing = baseSm * 0.6
-                    end
+                local distSq = DistanceSquared(data.anchor.Position, GetCamera().CFrame.Position)
+                
+                if distSq < 2500 then
+                    smoothing = baseSm * 1.4
+                elseif distSq > 90000 then
+                    smoothing = baseSm * 0.6
                 end
             end
             
@@ -2025,6 +2271,20 @@ function Aimbot:SetTriggerBot(enabled)
     end
 end
 
+function Aimbot:SetTargetMode(mode)
+    Settings.TargetMode = mode
+    if Notify then
+        Notify("Target Mode", mode == "Closest" and "📏 MAIS PRÓXIMO" or "🎯 FOV")
+    end
+end
+
+function Aimbot:SetAimOutsideFOV(enabled)
+    Settings.AimOutsideFOV = enabled
+    if Notify then
+        Notify("Aim Outside FOV", enabled and "ATIVADO ✅" or "DESATIVADO")
+    end
+end
+
 function Aimbot:SetSilentFOV(fov)
     Settings.SilentFOV = fov
 end
@@ -2047,7 +2307,6 @@ function Aimbot:Initialize()
     
     self:StartLoop()
     
-    -- Watchdog
     task.spawn(function()
         while true do
             task.wait(1.5)
@@ -2061,28 +2320,25 @@ function Aimbot:Initialize()
     self.Initialized = true
     
     print("═══════════════════════════════════════════")
-    print("  AIMBOT v4.1 - OPTIMIZED ULTRA RAGE")
+    print("  AIMBOT v4.2 - TARGET MODES + FIX")
     print("═══════════════════════════════════════════")
-    print("[✓] PartCache: ENABLED")
-    print("[✓] VisibilityCache MaxAge: " .. VisibilityCache.MaxAge)
-    print("[✓] Throttling: " .. (Settings.UpdateRate > 0 and (Settings.UpdateRate .. "Hz") or "MAX"))
+    print("[✓] Target Mode: " .. (Settings.TargetMode or "FOV"))
+    print("[✓] Aim Outside FOV: " .. tostring(Settings.AimOutsideFOV))
+    print("[✓] Auto Reset on Kill: " .. tostring(Settings.AutoResetOnKill))
     print("[✓] MouseMoveRel: " .. (AimController.HasMouseMoveRel and "OK" or "N/A"))
     print("[✓] SilentAim Hooks: " .. (SilentAim.HookedNamecall and "OK" or "N/A"))
-    print("[✓] Magic Bullet: Single Heartbeat")
-    print("[✓] Trigger Bot: Ready")
     print("═══════════════════════════════════════════")
 end
 
 function Aimbot:Debug()
-    print("\n═══════════════ AIMBOT DEBUG v4.1 ═══════════════")
+    print("\n═══════════════ AIMBOT DEBUG v4.2 ═══════════════")
     print("Initialized: " .. tostring(self.Initialized))
     print("Connection Active: " .. tostring(self.Connection ~= nil))
     
-    print("\n─── OPTIMIZATIONS ───")
-    print("  VisibilityCache MaxAge: " .. VisibilityCache.MaxAge)
-    print("  PartCache Entries: " .. (function() local c=0 for _ in pairs(PartCache) do c=c+1 end return c end)())
-    print("  TrackedProjectiles: " .. (function() local c=0 for _ in pairs(TrackedProjectiles) do c=c+1 end return c end)())
-    print("  UpdateRate: " .. (Settings.UpdateRate > 0 and (Settings.UpdateRate .. "Hz") or "MAX"))
+    print("\n─── TARGET SETTINGS ───")
+    print("  TargetMode: " .. (Settings.TargetMode or "FOV"))
+    print("  AimOutsideFOV: " .. tostring(Settings.AimOutsideFOV))
+    print("  AutoResetOnKill: " .. tostring(Settings.AutoResetOnKill))
     
     print("\n─── RAGE STATUS ───")
     print("  RageMode: " .. tostring(Settings.RageMode))
@@ -2090,20 +2346,20 @@ function Aimbot:Debug()
     print("  GodRageMode: " .. tostring(Settings.GodRageMode))
     
     print("\n─── FEATURES ───")
-    print("  SilentAim: " .. tostring(Settings.SilentAim) .. " (FOV: " .. tostring(Settings.SilentFOV) .. ")")
+    print("  SilentAim: " .. tostring(Settings.SilentAim))
     print("  MagicBullet: " .. tostring(Settings.MagicBullet))
-    print("  TriggerBot: " .. tostring(Settings.TriggerBot) .. " (FOV: " .. tostring(Settings.TriggerFOV) .. ")")
-    print("  AutoFire: " .. tostring(Settings.AutoFire))
+    print("  TriggerBot: " .. tostring(Settings.TriggerBot))
     
     print("\n─── Target ───")
     local target = TargetLock:GetTarget()
     print("  Current: " .. (target and target.Name or "None"))
+    print("  Is Alive: " .. tostring(target and TargetLock:IsTargetAlive() or false))
     print("  Kills: " .. TargetLock.KillCount)
-    print("  Frames: " .. AimbotState.FrameCount)
+    print("  Last Valid Pos: " .. tostring(TargetLock.LastValidPosition))
     
-    print("\n─── Performance ───")
+    print("\n─── Test ───")
     local t, s = FindBestTarget()
-    print("  Best Target: " .. (t and (t.Name .. " score:" .. string.format("%.1f", s)) or "None"))
+    print("  Best: " .. (t and (t.Name .. " score:" .. string.format("%.1f", s)) or "None"))
     
     print("═══════════════════════════════════════════\n")
 end
@@ -2115,6 +2371,10 @@ function Aimbot:ForceReset()
     PartCacheTime = {}
     TeamCache = {}
     PlayerDataCache = {}
+    PredictionHistory = {}
+    LastPredUpdate = {}
+    VisibilityCache:Clear()
+    AimController.LastValidAimPos = nil
     self:StopLoop()
     task.wait(0.1)
     self:StartLoop()
@@ -2143,6 +2403,10 @@ Core.Aimbot = {
     SetSilentAim = function(enabled) Aimbot:SetSilentAim(enabled) end,
     SetMagicBullet = function(enabled) Aimbot:SetMagicBullet(enabled) end,
     SetTriggerBot = function(enabled) Aimbot:SetTriggerBot(enabled) end,
+    
+    -- ★ NOVAS FUNÇÕES
+    SetTargetMode = function(mode) Aimbot:SetTargetMode(mode) end,
+    SetAimOutsideFOV = function(enabled) Aimbot:SetAimOutsideFOV(enabled) end,
     
     SetSilentFOV = function(fov) Aimbot:SetSilentFOV(fov) end,
     SetTriggerFOV = function(fov) Aimbot:SetTriggerFOV(fov) end,

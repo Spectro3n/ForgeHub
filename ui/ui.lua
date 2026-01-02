@@ -498,6 +498,7 @@ function UI:CreateInterface()
             Settings.PredictionMultiplier = v
         end
     })
+    
 
     -- ========================================================================
     -- RAGE TAB - TODAS AS OPÇÕES RAGE
@@ -553,6 +554,45 @@ function UI:CreateInterface()
             if v and Notify then
                 Notify("👑 GOD MODE", "TODOS OS PODERES ATIVADOS!")
             end
+        end
+    })
+
+    RageTab:CreateSection("🎯 TARGET MODE")
+
+    RageTab:CreateDropdown({
+        Name = "🎯 Modo de Seleção de Alvo",
+        Options = {"FOV", "Closest"},
+        CurrentOption = {Settings.TargetMode or "FOV"},
+        Callback = function(Option)
+            local mode = HandleDropdown(Option)
+            Settings.TargetMode = mode
+            if Core.Aimbot and Core.Aimbot.SetTargetMode then
+                Core.Aimbot.SetTargetMode(mode)
+            end
+        end
+    })
+
+    RageTab:CreateParagraph({
+        Title = "ℹ️ Modos de Target",
+        Content = "FOV: Mira no alvo mais próximo do mouse\nClosest: Mira no alvo mais próximo (distância)"
+    })
+
+    RageTab:CreateToggle({
+        Name = "🌍 Mirar Fora do FOV",
+        CurrentValue = Settings.AimOutsideFOV or false,
+        Callback = function(v)
+            Settings.AimOutsideFOV = v
+            if Core.Aimbot and Core.Aimbot.SetAimOutsideFOV then
+                Core.Aimbot.SetAimOutsideFOV(v)
+            end
+        end
+    })
+
+    RageTab:CreateToggle({
+        Name = "🔄 Auto Reset ao Matar",
+        CurrentValue = Settings.AutoResetOnKill or true,
+        Callback = function(v)
+            Settings.AutoResetOnKill = v
         end
     })
 
