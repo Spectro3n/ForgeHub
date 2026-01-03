@@ -210,46 +210,46 @@ end
 -- ============================================================================
 -- INPUT HANDLING
 -- ============================================================================
-local function SetupInputHandling()
-    UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
+-- local function SetupInputHandling()
+--     UserInputService.InputBegan:Connect(function(input, gameProcessed)
+--         if gameProcessed then return end
         
-        if isInputMatch and isInputMatch(input, Settings.AimbotUseKey) then 
-            State.MouseHold = true 
-        end
+--         if isInputMatch and isInputMatch(input, Settings.AimbotUseKey) then 
+--             State.MouseHold = true 
+--         end
         
-        if isInputMatch and isInputMatch(input, Settings.AimbotToggleKey) then 
-            Settings.AimbotActive = not Settings.AimbotActive
+--         if isInputMatch and isInputMatch(input, Settings.AimbotToggleKey) then 
+--             Settings.AimbotActive = not Settings.AimbotActive
             
-            -- ATUALIZA O TOGGLE NA UI
-            if UI.AimbotToggle and UI.AimbotToggle.Set then
-                pcall(function()
-                    UI.AimbotToggle:Set(Settings.AimbotActive)
-                end)
-            end
+--             -- ATUALIZA O TOGGLE NA UI
+--             if UI.AimbotToggle and UI.AimbotToggle.Set then
+--                 pcall(function()
+--                     UI.AimbotToggle:Set(Settings.AimbotActive)
+--                 end)
+--             end
             
-            if Notify then
-                local status = Settings.AimbotActive and "ATIVADO ✅" or "DESATIVADO ❌"
-                if Settings.GodRageMode then
-                    status = status .. " 👑 GOD MODE"
-                elseif Settings.UltraRageMode then
-                    status = status .. " ⚡ ULTRA"
-                elseif Settings.RageMode then
-                    status = status .. " 🔥 RAGE"
-                end
-                Notify("Aimbot", status)
-            end
-        end
-    end)
+--             if Notify then
+--                 local status = Settings.AimbotActive and "ATIVADO ✅" or "DESATIVADO ❌"
+--                 if Settings.GodRageMode then
+--                     status = status .. " 👑 GOD MODE"
+--                 elseif Settings.UltraRageMode then
+--                     status = status .. " ⚡ ULTRA"
+--                 elseif Settings.RageMode then
+--                     status = status .. " 🔥 RAGE"
+--                 end
+--                 Notify("Aimbot", status)
+--             end
+--         end
+--     end)
     
-    UserInputService.InputEnded:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
+--     UserInputService.InputEnded:Connect(function(input, gameProcessed)
+--         if gameProcessed then return end
         
-        if isInputMatch and isInputMatch(input, Settings.AimbotUseKey) then 
-            State.MouseHold = false 
-        end
-    end)
-end
+--         if isInputMatch and isInputMatch(input, Settings.AimbotUseKey) then 
+--             State.MouseHold = false 
+--         end
+--     end)
+-- end
 
 -- ============================================================================
 -- UI
@@ -1194,7 +1194,7 @@ end
 function UI:Initialize()
     EnsureSettingsCompat()
     InitializeVisuals()
-    SetupInputHandling()
+    -- SetupInputHandling()
     
     RunService.RenderStepped:Connect(function()
         SafeCall(function()
