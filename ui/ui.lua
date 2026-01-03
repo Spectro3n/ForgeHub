@@ -61,17 +61,6 @@ local function EnsureSettingsCompat()
     Settings.UltraRageMode = Settings.UltraRageMode or false
     Settings.GodRageMode = Settings.GodRageMode or false
     
-    -- Silent Aim defaults
-    Settings.SilentAim = Settings.SilentAim or false
-    Settings.SilentFOV = Settings.SilentFOV or 500
-    Settings.SilentHitChance = Settings.SilentHitChance or 100
-    Settings.SilentHeadshotChance = Settings.SilentHeadshotChance or 100
-    
-    -- Magic Bullet defaults
-    Settings.MagicBullet = Settings.MagicBullet or false
-    Settings.MagicBulletMethod = Settings.MagicBulletMethod or "Teleport"
-    Settings.MagicBulletAutoHit = Settings.MagicBulletAutoHit or true
-    
     -- Trigger Bot defaults
     Settings.TriggerBot = Settings.TriggerBot or false
     Settings.TriggerFOV = Settings.TriggerFOV or 50
@@ -87,10 +76,9 @@ end
 EnsureSettingsCompat()
 
 -- ============================================================================
--- FOV CIRCLES (Aimbot, Silent, Trigger)
+-- FOV CIRCLES (Aimbot, Trigger)
 -- ============================================================================
 local FOVCircle = nil
-local SilentFOVCircle = nil
 local TriggerFOVCircle = nil
 local TargetIndicator = nil
 
@@ -110,18 +98,6 @@ local function InitializeVisuals()
         FOVCircle.Visible = false
         FOVCircle.Color = Settings.FOVColor or Color3.fromRGB(255, 255, 255)
         FOVCircle.Transparency = 1
-    end
-    
-    -- Silent Aim FOV Circle
-    SilentFOVCircle = DrawingPool:Acquire("Circle")
-    if SilentFOVCircle then
-        SilentFOVCircle.Thickness = 1.5
-        SilentFOVCircle.NumSides = 48
-        SilentFOVCircle.Radius = Settings.SilentFOV or 500
-        SilentFOVCircle.Filled = false
-        SilentFOVCircle.Visible = false
-        SilentFOVCircle.Color = Color3.fromRGB(255, 0, 255) -- Roxo para Silent
-        SilentFOVCircle.Transparency = 1
     end
     
     -- Trigger Bot FOV Circle
@@ -165,15 +141,7 @@ local function UpdateVisuals()
         FOVCircle.Position = mouseVec
         FOVCircle.Color = Settings.FOVColor or Color3.fromRGB(255, 255, 255)
     end
-    
-    -- Silent FOV Circle
-    if SilentFOVCircle then
-        local showSilentFOV = Settings.SilentAim and (Settings.ShowSilentFOV or false)
-        SilentFOVCircle.Visible = showSilentFOV
-        SilentFOVCircle.Radius = math.clamp(Settings.SilentFOV or 500, 1, 5000)
-        SilentFOVCircle.Position = mouseVec
-    end
-    
+
     -- Trigger FOV Circle
     if TriggerFOVCircle then
         local showTriggerFOV = Settings.TriggerBot and (Settings.ShowTriggerFOV or false)
@@ -547,8 +515,6 @@ function UI:CreateInterface()
                     Settings.RageMode = true
                     Settings.UltraRageMode = true
                     Settings.IgnoreWalls = true
-                    Settings.SilentAim = true
-                    Settings.MagicBullet = true
                 end
             end
             
@@ -837,8 +803,6 @@ function UI:CreateInterface()
             Settings.RageMode = true
             Settings.UltraRageMode = true
             Settings.GodRageMode = true
-            Settings.SilentAim = true
-            Settings.MagicBullet = true
             Settings.TriggerBot = true
             Settings.AutoFire = true
             Settings.AutoSwitch = true
@@ -848,12 +812,6 @@ function UI:CreateInterface()
             if Core.Aimbot then
                 if Core.Aimbot.SetGodRageMode then
                     Core.Aimbot.SetGodRageMode(true)
-                end
-                if Core.Aimbot.SetSilentAim then
-                    Core.Aimbot.SetSilentAim(true)
-                end
-                if Core.Aimbot.SetMagicBullet then
-                    Core.Aimbot.SetMagicBullet(true)
                 end
                 if Core.Aimbot.SetTriggerBot then
                     Core.Aimbot.SetTriggerBot(true)
@@ -870,8 +828,6 @@ function UI:CreateInterface()
             Settings.RageMode = false
             Settings.UltraRageMode = false
             Settings.GodRageMode = false
-            Settings.SilentAim = false
-            Settings.MagicBullet = false
             Settings.TriggerBot = false
             Settings.AutoFire = false
             Settings.AutoSwitch = false
@@ -880,12 +836,6 @@ function UI:CreateInterface()
             if Core.Aimbot then
                 if Core.Aimbot.SetGodRageMode then
                     Core.Aimbot.SetGodRageMode(false)
-                end
-                if Core.Aimbot.SetSilentAim then
-                    Core.Aimbot.SetSilentAim(false)
-                end
-                if Core.Aimbot.SetMagicBullet then
-                    Core.Aimbot.SetMagicBullet(false)
                 end
                 if Core.Aimbot.SetTriggerBot then
                     Core.Aimbot.SetTriggerBot(false)
@@ -1140,7 +1090,7 @@ function UI:CreateInterface()
 
     SystemTab:CreateParagraph({
         Title = "ForgeHub v4.0 ULTRA RAGE",
-        Content = "🔥 Rage Mode\n⚡ Ultra Rage Mode\n👑 God Rage Mode\n👻 Silent Aim com FOV\n✨ Magic Bullet\n⚡ Trigger Bot com FOV"
+        Content = "🔥 Rage Mode\n⚡ Ultra Rage Mode\n👑 God Rage Mode\n✨ Magic Bullet\n⚡ Trigger Bot com FOV"
     })
 
     self:StartStatsUpdateLoop()
@@ -1206,16 +1156,14 @@ function UI:UpdateStats()
             local rageStatus = Settings.RageMode and "🔥" or "❌"
             local ultraStatus = Settings.UltraRageMode and "⚡" or "❌"
             local godStatus = Settings.GodRageMode and "👑" or "❌"
-            local silentStatus = Settings.SilentAim and "✅" or "❌"
-            local magicStatus = Settings.MagicBullet and "✅" or "❌"
             local triggerStatus = Settings.TriggerBot and "✅" or "❌"
             
             self.StatsLabels.RageParagraph:Set({
                 Title = "🔥 Rage Status",
                 Content = string.format(
-                    "Rage: %s | Ultra: %s | God: %s\nSilent: %s | Magic: %s | Trigger: %s",
+                    "Rage: %s | Ultra: %s | God: %s\n Magic: %s | Trigger: %s",
                     rageStatus, ultraStatus, godStatus,
-                    silentStatus, magicStatus, triggerStatus
+                    triggerStatus
                 )
             })
         end

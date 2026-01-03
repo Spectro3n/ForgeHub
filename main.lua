@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB ULTIMATE v23.1 - MAIN LOADER (MODULAR v4.6)
+-- FORGEHUB ULTIMATE v24.0 - MAIN LOADER (CLEAN MODULAR)
 -- ============================================================================
 
 if _G.ForgeHubLoaded then
@@ -154,23 +154,10 @@ local Settings = {
     IgnoreWalls = false,
     AntiAimDetection = false,
     
-    -- Silent Aim
-    SilentAim = false,
-    SilentFOV = 500,
-    SilentHitChance = 100,
-    SilentHeadshotChance = 100,
-    SilentPrediction = true,
-    
-    -- Magic Bullet
-    MagicBullet = false,
-    MagicBulletMethod = "Teleport",
-    MagicBulletSpeed = 9999,
-    MagicBulletIgnoreWalls = true,
-    MagicBulletAutoHit = true,
-    
     -- Trigger Bot
     TriggerBot = false,
     TriggerFOV = 50,
+    ShowTriggerFOV = false,
     TriggerDelay = 0.05,
     TriggerBurst = false,
     TriggerBurstCount = 3,
@@ -187,7 +174,7 @@ local Settings = {
     LockImprovementThreshold = 0.8,
     ShowTargetIndicator = true,
     
-    -- TP Bullet (NOVO)
+    -- TP Bullet
     TPBullet = false,
     TPBulletPosition = "Behind",
     TPBulletDistance = 5,
@@ -201,7 +188,7 @@ local Settings = {
     RageHeadOnly = false,
     RageIgnoreWalls = true,
     RageInstantSwitch = true,
-
+    
     -- ESP
     ESPEnabled = true,
     IgnoreTeamESP = true,
@@ -232,7 +219,7 @@ local Settings = {
         LocalSkeleton = false,
         SkeletonMaxDistance = 250,
     },
-
+    
     -- Colors
     BoxColor = Color3.fromRGB(255, 170, 60),
     SkeletonColor = Color3.fromRGB(255, 255, 255),
@@ -297,7 +284,7 @@ local function LoadModule(url, moduleName)
         return loadstring(game:HttpGet(url))()
     end)
     
-    if success then
+    if success and result then
         LoadedModules[moduleName] = result
         Notify("ForgeHub", "✅ " .. moduleName .. " carregado")
         return result
@@ -311,7 +298,7 @@ end
 -- ============================================================================
 -- LOAD MODULES
 -- ============================================================================
-Notify("ForgeHub v23.1", "Iniciando carregamento...")
+Notify("ForgeHub v24.0", "Iniciando carregamento...")
 
 local BASE_URL = "https://raw.githubusercontent.com/Spectro3n/ForgeHub/main/"
 
@@ -330,37 +317,36 @@ if not ESP then return end
 Core.ESP = ESP
 
 -- ============================================================================
--- AIMBOT - CARREGAMENTO MODULAR v4.6
+-- AIMBOT - CARREGAMENTO MODULAR LIMPO v24.0
 -- ============================================================================
-Notify("ForgeHub", "🎯 Carregando Sistema de Mira Modular...")
+Notify("ForgeHub", "🎯 Carregando Sistema de Mira...")
 
--- Carregar submódulos base
-local AimbotUtils = LoadModule(BASE_URL .. "aimbot/utils.lua", "aimbot/utils")
-local AimbotSettingsModule = LoadModule(BASE_URL .. "aimbot/settings.lua", "aimbot/settings")
-local AimbotEventBus = LoadModule(BASE_URL .. "aimbot/eventbus.lua", "aimbot/eventbus")
-local AimbotHooks = LoadModule(BASE_URL .. "aimbot/hooks.lua", "aimbot/hooks")
-
--- Carregar módulos principais SEPARADOS
-local AimbotLegitModule = LoadModule(BASE_URL .. "aimbot/aimbot.lua", "aimbot/legit")
-local AimbotRageModule = LoadModule(BASE_URL .. "aimbot/rage.lua", "aimbot/rage")
-local TPBulletModule = LoadModule(BASE_URL .. "aimbot/tp_bullet.lua", "aimbot/tp_bullet")
-local AimbotTrigger = LoadModule(BASE_URL .. "aimbot/trigger.lua", "aimbot/trigger")
+-- Carregar módulos do Aimbot
+local AimbotUtils = LoadModule(BASE_URL .. "aimbot/utils.lua", "Aimbot/Utils")
+local AimbotSettingsModule = LoadModule(BASE_URL .. "aimbot/settings.lua", "Aimbot/Settings")
+local AimbotLegitModule = LoadModule(BASE_URL .. "aimbot/aimbot.lua", "Aimbot/Legit")
+local AimbotRageModule = LoadModule(BASE_URL .. "aimbot/rage.lua", "Aimbot/Rage")
+local TPBulletModule = LoadModule(BASE_URL .. "aimbot/tp_bullet.lua", "Aimbot/TPBullet")
+local AimbotTrigger = LoadModule(BASE_URL .. "aimbot/trigger.lua", "Aimbot/Trigger")
 
 -- ============================================================================
--- INICIALIZAÇÃO DO SISTEMA MODULAR
+-- INICIALIZAÇÃO DO SISTEMA DE MIRA
 -- ============================================================================
 local AimbotAPI = nil
+local Aimbot = nil
+local Rage = nil
+local TPBullet = nil
+local TargetLock = nil
 
-if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
-    -- Sincronizar settings
-    local AimbotSettings = Settings
-    if AimbotSettingsModule then
-        -- Se o módulo de settings tem função de merge, usa
-        if type(AimbotSettingsModule) == "table" then
-            for key, value in pairs(AimbotSettingsModule) do
-                if type(value) ~= "function" and Settings[key] == nil then
-                    Settings[key] = value
-                end
+-- Verificar se os módulos essenciais carregaram
+if AimbotLegitModule and AimbotUtils then
+    print("[ForgeHub] Módulos de Aimbot carregados, inicializando...")
+    
+    -- Sincronizar settings do módulo
+    if AimbotSettingsModule and type(AimbotSettingsModule) == "table" then
+        for key, value in pairs(AimbotSettingsModule) do
+            if type(value) ~= "function" and Settings[key] == nil then
+                Settings[key] = value
             end
         end
     end
@@ -368,57 +354,119 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
     -- Sincronizar IgnoreTeam
     Settings.IgnoreTeam = Settings.IgnoreTeamAimbot
     
-    -- Criar SharedDeps base
+    -- Criar SharedDeps (sem EventBus e Hooks)
     local SharedDeps = {
         Utils = AimbotUtils,
-        Settings = AimbotSettings,
-        EventBus = AimbotEventBus,
-        Hooks = AimbotHooks,
+        Settings = Settings,
         LocalPlayer = LocalPlayer,
         UserInputService = UserInputService,
         Players = Players,
+        Camera = Camera,
+        Workspace = Workspace,
+        RunService = RunService,
     }
     
-    -- Inicializar Hooks
-    if AimbotHooks.Initialize then
-        AimbotHooks:Initialize({EventBus = AimbotEventBus})
+    -- Obter referências do módulo Legit
+    if AimbotLegitModule.Aimbot then
+        Aimbot = AimbotLegitModule.Aimbot
+    elseif type(AimbotLegitModule) == "table" and AimbotLegitModule.Initialize then
+        Aimbot = AimbotLegitModule
     end
     
-    -- Obter referências
-    local Aimbot = AimbotLegitModule.Aimbot
-    local TargetLock = AimbotLegitModule.TargetLock
+    if AimbotLegitModule.TargetLock then
+        TargetLock = AimbotLegitModule.TargetLock
+    end
     
     -- Inicializar Aimbot Legit
     if Aimbot and Aimbot.Initialize then
-        Aimbot:Initialize(SharedDeps)
+        local initSuccess = pcall(function()
+            Aimbot:Initialize(SharedDeps)
+        end)
+        if initSuccess then
+            print("[ForgeHub] ✓ Aimbot Legit inicializado")
+        else
+            warn("[ForgeHub] ✗ Falha ao inicializar Aimbot Legit")
+        end
     end
     
-    -- Adicionar Aimbot às deps
     SharedDeps.Aimbot = Aimbot
     
     -- Inicializar Rage Module
-    local Rage = nil
-    if AimbotRageModule and AimbotRageModule.Rage then
-        Rage = AimbotRageModule.Rage
-        if Rage.Initialize then
-            Rage:Initialize(SharedDeps)
+    if AimbotRageModule then
+        if AimbotRageModule.Rage then
+            Rage = AimbotRageModule.Rage
+        elseif type(AimbotRageModule) == "table" and AimbotRageModule.Initialize then
+            Rage = AimbotRageModule
+        end
+        
+        if Rage and Rage.Initialize then
+            local initSuccess = pcall(function()
+                Rage:Initialize(SharedDeps)
+            end)
+            if initSuccess then
+                print("[ForgeHub] ✓ Rage Module inicializado")
+            end
         end
         SharedDeps.Rage = Rage
     end
     
     -- Inicializar TP Bullet
-    local TPBullet = nil
-    if TPBulletModule and TPBulletModule.TPBullet then
-        TPBullet = TPBulletModule.TPBullet
-        if TPBullet.Initialize then
-            TPBullet:Initialize(SharedDeps)
+    if TPBulletModule then
+        if TPBulletModule.TPBullet then
+            TPBullet = TPBulletModule.TPBullet
+        elseif type(TPBulletModule) == "table" and TPBulletModule.Initialize then
+            TPBullet = TPBulletModule
+        end
+        
+        if TPBullet and TPBullet.Initialize then
+            local initSuccess = pcall(function()
+                TPBullet:Initialize(SharedDeps)
+            end)
+            if initSuccess then
+                print("[ForgeHub] ✓ TP Bullet inicializado")
+            end
         end
         SharedDeps.TPBullet = TPBullet
     end
     
     -- Inicializar Trigger
     if AimbotTrigger and AimbotTrigger.Initialize then
-        AimbotTrigger:Initialize(SharedDeps)
+        local initSuccess = pcall(function()
+            AimbotTrigger:Initialize(SharedDeps)
+        end)
+        if initSuccess then
+            print("[ForgeHub] ✓ Trigger Bot inicializado")
+        end
+    end
+    
+    -- ========================================================================
+    -- SIMPLE CLICK SIMULATION
+    -- ========================================================================
+    local function SimulateClick()
+        local success = false
+        
+        -- Método 1: mouse1press/mouse1release
+        if mouse1press and mouse1release then
+            pcall(function()
+                mouse1press()
+                task.wait(0.01)
+                mouse1release()
+                success = true
+            end)
+        end
+        
+        -- Método 2: VirtualInputManager
+        if not success then
+            pcall(function()
+                local vim = game:GetService("VirtualInputManager")
+                vim:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+                task.wait(0.01)
+                vim:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                success = true
+            end)
+        end
+        
+        return success
     end
     
     -- ========================================================================
@@ -441,7 +489,7 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         
         -- Verificar se tem alvo
         local hasTarget = false
-        if Rage and Rage:IsActive() then
+        if Rage and Rage.IsActive and Rage:IsActive() then
             hasTarget = Rage:GetCurrentTarget() ~= nil
         elseif Aimbot and Aimbot.GetCurrentTarget then
             hasTarget = Aimbot:GetCurrentTarget() ~= nil
@@ -449,11 +497,8 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         
         if not hasTarget then return end
         
-        if AimbotHooks.SimulateClick and AimbotHooks:SimulateClick() then
+        if SimulateClick() then
             self.LastFire = now
-            if AimbotEventBus.Emit then
-                AimbotEventBus:Emit("autofire:fired")
-            end
         end
     end
     
@@ -470,22 +515,26 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
     function AimbotState:Reset()
         self.Active = false
         self.ErrorCount = 0
-        if Aimbot and Aimbot.ForceReset then Aimbot:ForceReset() end
-        if Rage and Rage.ForceReset then Rage:ForceReset() end
-        if TPBullet and TPBullet.ForceReset then TPBullet:ForceReset() end
-        if AimbotTrigger and AimbotTrigger.Disable then AimbotTrigger:Disable() end
-        if AimbotUtils and AimbotUtils.ClearAllCaches then AimbotUtils.ClearAllCaches() end
+        if Aimbot and Aimbot.ForceReset then pcall(function() Aimbot:ForceReset() end) end
+        if Rage and Rage.ForceReset then pcall(function() Rage:ForceReset() end) end
+        if TPBullet and TPBullet.ForceReset then pcall(function() TPBullet:ForceReset() end) end
+        if AimbotTrigger and AimbotTrigger.Disable then pcall(function() AimbotTrigger:Disable() end) end
+        if AimbotUtils and AimbotUtils.ClearAllCaches then pcall(function() AimbotUtils.ClearAllCaches() end) end
     end
     
     local function MainUpdate()
+        -- Verificar se aimbot está ativo
+        if not Settings.AimbotActive then return end
+        
         local success = pcall(function()
             local mouseHold = State.MouseHold
-            
             local rageProcessed = false
             
             -- Se Rage está ativo, usar Rage
-            if Rage and Rage:IsActive() then
-                rageProcessed = Rage:Update(mouseHold)
+            if Rage and Rage.IsActive and Rage:IsActive() then
+                if Rage.Update then
+                    rageProcessed = Rage:Update(mouseHold)
+                end
             end
             
             -- Se Rage não processou, usar Legit
@@ -494,7 +543,7 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
             end
             
             -- Update TP Bullet
-            if TPBullet and Settings.TPBullet then
+            if TPBullet and Settings.TPBullet and TPBullet.Update then
                 TPBullet:Update(mouseHold)
             end
             
@@ -506,21 +555,15 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
                 
                 if AimbotTrigger.IsFiring and AimbotTrigger:IsFiring() then
                     if Settings.TriggerBurst and AimbotTrigger.StartBurst then
-                        AimbotTrigger:StartBurst(function()
-                            if AimbotHooks.SimulateClick then
-                                AimbotHooks:SimulateClick()
-                            end
-                        end)
+                        AimbotTrigger:StartBurst(SimulateClick)
                     else
-                        if AimbotHooks.SimulateClick then
-                            AimbotHooks:SimulateClick()
-                        end
+                        SimulateClick()
                     end
                 end
             end
             
             -- Auto Fire
-            if Settings.AutoFire and (Aimbot.Active or (Rage and Rage._active)) then
+            if Settings.AutoFire and mouseHold then
                 AutoFire:TryFire()
             end
         end)
@@ -531,6 +574,8 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
                 warn("[Aimbot] Muitos erros, resetando...")
                 AimbotState:Reset()
             end
+        else
+            AimbotState.ErrorCount = 0
         end
     end
     
@@ -550,6 +595,7 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         end
         
         AimbotState.Connection = event:Connect(MainUpdate)
+        print("[Aimbot] Loop iniciado")
     end
     
     local function StopLoop()
@@ -569,9 +615,9 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
             
             -- Watchdog
             task.spawn(function()
-                while true do
-                    task.wait(1.5)
-                    if not AimbotState.Connection then
+                while _G.ForgeHubLoaded do
+                    task.wait(2)
+                    if not AimbotState.Connection and Settings.AimbotActive then
                         warn("[Aimbot] Loop morreu, reiniciando...")
                         StartLoop()
                     end
@@ -579,13 +625,12 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
             end)
             
             print("═══════════════════════════════════════════")
-            print("  SISTEMA DE MIRA MODULAR v4.6")
+            print("  SISTEMA DE MIRA v24.0 CLEAN")
             print("═══════════════════════════════════════════")
-            print("[✓] Legit Aimbot: " .. (Aimbot and "OK" or "N/A"))
-            print("[✓] Rage Module: " .. (Rage and "OK" or "N/A"))
+            print("[✓] Aimbot: " .. (Aimbot and "OK" or "N/A"))
+            print("[✓] Rage: " .. (Rage and "OK" or "N/A"))
             print("[✓] TP Bullet: " .. (TPBullet and "OK" or "N/A"))
-            print("[✓] Trigger Bot: " .. (AimbotTrigger and "OK" or "N/A"))
-            print("[✓] MouseMoveRel: " .. (AimbotHooks.HasCapability and AimbotHooks:HasCapability("HasMouseMoveRel") and "OK" or "N/A"))
+            print("[✓] Trigger: " .. (AimbotTrigger and "OK" or "N/A"))
             print("═══════════════════════════════════════════")
         end,
         
@@ -604,7 +649,6 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         
         SetAimOutsideFOV = function(enabled)
             Settings.AimOutsideFOV = enabled
-            Notify("Aim Outside FOV", enabled and "ATIVADO ✅" or "DESATIVADO")
         end,
         
         SetAimbotFOV = function(fov)
@@ -627,7 +671,7 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         -- Rage Modes
         SetRageMode = function(enabled)
             Settings.RageMode = enabled
-            if Rage then Rage:SetRageMode(enabled) end
+            if Rage and Rage.SetRageMode then Rage:SetRageMode(enabled) end
             StopLoop()
             StartLoop()
             Notify("Aimbot", "Rage Mode " .. (enabled and "ATIVADO 🔥" or "DESATIVADO"))
@@ -636,7 +680,7 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         SetUltraRageMode = function(enabled)
             Settings.UltraRageMode = enabled
             if enabled then Settings.RageMode = true end
-            if Rage then Rage:SetUltraRageMode(enabled) end
+            if Rage and Rage.SetUltraRageMode then Rage:SetUltraRageMode(enabled) end
             StopLoop()
             StartLoop()
             Notify("Aimbot", "ULTRA RAGE " .. (enabled and "ATIVADO ⚡🔥" or "DESATIVADO"))
@@ -648,71 +692,42 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
                 Settings.RageMode = true
                 Settings.UltraRageMode = true
             end
-            if Rage then Rage:SetGodRageMode(enabled) end
+            if Rage and Rage.SetGodRageMode then Rage:SetGodRageMode(enabled) end
             StopLoop()
             StartLoop()
             Notify("Aimbot", "👑 GOD RAGE 👑 " .. (enabled and "ATIVADO" or "DESATIVADO"))
         end,
         
-        SetRageHeadOnly = function(enabled)
-            Settings.RageHeadOnly = enabled
-        end,
-        
         -- TP Bullet
         SetTPBullet = function(enabled)
             Settings.TPBullet = enabled
-            if TPBullet then TPBullet:Toggle(enabled) end
+            if TPBullet and TPBullet.Toggle then TPBullet:Toggle(enabled) end
             Notify("TP Bullet", enabled and "ATIVADO 🚀" or "DESATIVADO")
         end,
         
         SetTPBulletPosition = function(pos)
             Settings.TPBulletPosition = pos
-            if TPBullet then TPBullet:SetPosition(pos) end
+            if TPBullet and TPBullet.SetPosition then TPBullet:SetPosition(pos) end
         end,
         
         SetTPBulletDistance = function(dist)
             Settings.TPBulletDistance = dist
-            if TPBullet then TPBullet:SetDistance(dist) end
+            if TPBullet and TPBullet.SetDistance then TPBullet:SetDistance(dist) end
         end,
         
         SetTPBulletHeight = function(height)
             Settings.TPBulletHeight = height
-            if TPBullet then TPBullet:SetHeight(height) end
+            if TPBullet and TPBullet.SetHeight then TPBullet:SetHeight(height) end
         end,
         
         SetTPBulletReturn = function(enabled)
             Settings.TPBulletReturn = enabled
-            if TPBullet then TPBullet:SetReturnAfterShot(enabled) end
-        end,
-        
-        SetTPBulletReturnDelay = function(delay)
-            Settings.TPBulletReturnDelay = delay
-            if TPBullet then TPBullet.ReturnDelay = delay end
+            if TPBullet and TPBullet.SetReturnAfterShot then TPBullet:SetReturnAfterShot(enabled) end
         end,
         
         ForceTPReturn = function()
-            if TPBullet then return TPBullet:ForceReturn() end
+            if TPBullet and TPBullet.ForceReturn then return TPBullet:ForceReturn() end
             return false
-        end,
-        
-        -- Silent Aim
-        SetSilentAim = function(enabled)
-            Settings.SilentAim = enabled
-            Notify("Silent Aim", enabled and "ATIVADO 🔇" or "DESATIVADO")
-        end,
-        
-        SetSilentFOV = function(fov)
-            Settings.SilentFOV = fov
-        end,
-        
-        SetSilentHitChance = function(chance)
-            Settings.SilentHitChance = chance
-        end,
-        
-        -- Magic Bullet
-        SetMagicBullet = function(enabled)
-            Settings.MagicBullet = enabled
-            Notify("Magic Bullet", enabled and "ATIVADO ✨" or "DESATIVADO")
         end,
         
         -- Trigger
@@ -734,14 +749,6 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         
         SetTriggerDelay = function(delay)
             Settings.TriggerDelay = delay
-        end,
-        
-        SetTriggerBurst = function(enabled)
-            Settings.TriggerBurst = enabled
-        end,
-        
-        SetTriggerBurstCount = function(count)
-            Settings.TriggerBurstCount = count
         end,
         
         -- Auto Fire
@@ -773,8 +780,10 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         end,
         
         GetCurrentTarget = function()
-            if Rage and Rage:IsActive() then
-                return Rage:GetCurrentTarget()
+            if Rage and Rage.IsActive and Rage:IsActive() then
+                if Rage.GetCurrentTarget then
+                    return Rage:GetCurrentTarget()
+                end
             end
             if Aimbot and Aimbot.GetCurrentTarget then
                 return Aimbot:GetCurrentTarget()
@@ -783,7 +792,8 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         end,
         
         Debug = function()
-            print("\n═══════════════ AIMBOT DEBUG v4.6 ═══════════════")
+            print("\n═══════════════ AIMBOT DEBUG v24.0 ═══════════════")
+            print("AimbotActive: " .. tostring(Settings.AimbotActive))
             print("Connection Active: " .. tostring(AimbotState.Connection ~= nil))
             print("\n─── TARGET SETTINGS ───")
             print("  TargetMode: " .. (Settings.TargetMode or "FOV"))
@@ -794,24 +804,14 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
             print("  RageMode: " .. tostring(Settings.RageMode))
             print("  UltraRageMode: " .. tostring(Settings.UltraRageMode))
             print("  GodRageMode: " .. tostring(Settings.GodRageMode))
-            print("\n─── TP BULLET ───")
-            print("  Enabled: " .. tostring(Settings.TPBullet))
-            print("  Position: " .. (Settings.TPBulletPosition or "Behind"))
-            print("  Distance: " .. tostring(Settings.TPBulletDistance))
-            if TPBullet then
-                print("  Teleported: " .. tostring(TPBullet:IsTeleported()))
-            end
-            print("\n─── FEATURES ───")
-            print("  SilentAim: " .. tostring(Settings.SilentAim))
-            print("  MagicBullet: " .. tostring(Settings.MagicBullet))
-            print("  TriggerBot: " .. tostring(Settings.TriggerBot))
-            print("  AutoFire: " .. tostring(Settings.AutoFire))
+            print("\n─── MODULES ───")
+            print("  Aimbot: " .. (Aimbot and "Loaded" or "Not Loaded"))
+            print("  Rage: " .. (Rage and "Loaded" or "Not Loaded"))
+            print("  TPBullet: " .. (TPBullet and "Loaded" or "Not Loaded"))
+            print("  Trigger: " .. (AimbotTrigger and "Loaded" or "Not Loaded"))
             print("\n─── Current Target ───")
             local target = AimbotAPI.GetCurrentTarget()
             print("  Target: " .. (target and target.Name or "None"))
-            if TargetLock then
-                print("  Kills: " .. tostring(TargetLock.Kills or 0))
-            end
             print("═══════════════════════════════════════════\n")
         end,
         
@@ -823,21 +823,10 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
         TriggerBot = AimbotTrigger,
         AutoFire = AutoFire,
         Settings = Settings,
-        EventBus = AimbotEventBus,
-        Hooks = AimbotHooks,
         Utils = AimbotUtils,
         
         -- Legacy Compatibility
         Main = Aimbot,
-        AimController = Aimbot,
-        Update = MainUpdate,
-        GetClosestPlayer = function()
-            if Aimbot and Aimbot.FindBest then
-                local target = Aimbot:FindBest()
-                return target
-            end
-            return nil
-        end,
         CameraBypass = {
             GetLockedTarget = function()
                 return AimbotAPI.GetCurrentTarget()
@@ -856,29 +845,24 @@ if AimbotLegitModule and AimbotUtils and AimbotEventBus and AimbotHooks then
     -- Exportar para Core
     Core.Aimbot = AimbotAPI
     
-    print("[ForgeHub] Sistema de Mira Modular v4.6 carregado!")
-else
-    warn("[ForgeHub] Falha ao inicializar Aimbot - módulos não carregados")
+    print("[ForgeHub] ✓ Sistema de Mira v24.0 pronto!")
     
-    -- API vazia para evitar erros
+else
+    warn("[ForgeHub] ✗ Falha ao carregar módulos de Aimbot!")
+    warn("[ForgeHub] AimbotLegitModule: " .. tostring(AimbotLegitModule ~= nil))
+    warn("[ForgeHub] AimbotUtils: " .. tostring(AimbotUtils ~= nil))
+    
+    -- API mínima para evitar erros
     AimbotAPI = {
-        Initialize = function() end,
+        Initialize = function() warn("Aimbot não carregado") end,
         Toggle = function() end,
         SetRageMode = function() end,
         SetUltraRageMode = function() end,
         SetGodRageMode = function() end,
         SetTPBullet = function() end,
-        SetTPBulletPosition = function() end,
-        SetTPBulletDistance = function() end,
-        SetTPBulletHeight = function() end,
-        SetTPBulletReturn = function() end,
-        ForceTPReturn = function() end,
-        SetSilentAim = function() end,
-        SetMagicBullet = function() end,
         SetTriggerBot = function() end,
         SetTargetMode = function() end,
         SetAimOutsideFOV = function() end,
-        SetSilentFOV = function() end,
         SetTriggerFOV = function() end,
         SetAimbotFOV = function() end,
         ForceReset = function() end,
@@ -908,26 +892,26 @@ task.spawn(function()
     
     -- Inicializar Semantic Engine
     if Semantic and Semantic.Initialize then
-        Semantic:Initialize()
+        SafeCall(function() Semantic:Initialize() end, "SemanticInit")
     end
     
     -- Inicializar ESP
     if ESP and ESP.Initialize then
-        ESP:Initialize()
+        SafeCall(function() ESP:Initialize() end, "ESPInit")
     end
     
     -- Inicializar Aimbot
     if AimbotAPI and AimbotAPI.Initialize then
-        AimbotAPI.Initialize()
+        SafeCall(function() AimbotAPI.Initialize() end, "AimbotInit")
     end
     
     -- Inicializar UI
     if UI and UI.Initialize then
-        UI:Initialize()
+        SafeCall(function() UI:Initialize() end, "UIInit")
     end
     
     wait(0.5)
-    Notify("ForgeHub v23.1", "✅ Todos os módulos carregados!")
+    Notify("ForgeHub v24.0", "✅ Todos os módulos carregados!")
 end)
 
 -- ============================================================================
@@ -944,7 +928,17 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     -- Toggle Aimbot
     if isInputMatch(input, Settings.AimbotToggleKey) then
         Settings.AimbotActive = not Settings.AimbotActive
-        Notify("Aimbot", Settings.AimbotActive and "ATIVADO ✅" or "DESATIVADO ❌")
+        
+        local status = Settings.AimbotActive and "ATIVADO ✅" or "DESATIVADO ❌"
+        if Settings.GodRageMode then
+            status = status .. " 👑 GOD"
+        elseif Settings.UltraRageMode then
+            status = status .. " ⚡ ULTRA"
+        elseif Settings.RageMode then
+            status = status .. " 🔥 RAGE"
+        end
+        
+        Notify("Aimbot", status)
     end
 end)
 
@@ -961,7 +955,7 @@ end)
 
 -- ESP Update Loop
 task.spawn(function()
-    while true do
+    while _G.ForgeHubLoaded do
         local interval = 0.05
         if Performance and Performance.PerformanceManager then
             interval = Performance.PerformanceManager.espInterval or 0.05
@@ -984,14 +978,12 @@ end)
 
 -- Performance Loop
 task.spawn(function()
-    while wait(0.1) do
+    while _G.ForgeHubLoaded do
+        wait(0.1)
         pcall(function()
             if Performance then
                 if Performance.PerformanceManager and Performance.PerformanceManager.Update then
                     Performance.PerformanceManager:Update()
-                end
-                if Performance.Profiler and Performance.Profiler.Update then
-                    Performance.Profiler:Update()
                 end
             end
         end)
@@ -1000,7 +992,8 @@ end)
 
 -- Semantic Periodic Updates
 task.spawn(function()
-    while wait(5) do
+    while _G.ForgeHubLoaded do
+        wait(5)
         pcall(function()
             if Semantic then
                 if Semantic.ScanForContainers then
