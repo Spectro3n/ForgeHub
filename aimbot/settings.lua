@@ -1,5 +1,6 @@
 -- ============================================================================
--- FORGEHUB - AIMBOT SETTINGS v4.3
+-- FORGEHUB - AIMBOT SETTINGS v4.6
+-- Atualizado com TP Bullet e configurações modulares
 -- ============================================================================
 
 local Settings = {}
@@ -10,14 +11,15 @@ local Settings = {}
 Settings.RageMode = false
 Settings.UltraRageMode = false
 Settings.GodRageMode = false
+Settings.RageHeadOnly = true             -- Rage sempre mira na cabeça
 
 -- ============================================================================
--- TARGET MODE (NOVO)
+-- TARGET MODE
 -- ============================================================================
 Settings.TargetMode = "FOV"              -- "FOV" ou "Closest"
 Settings.AimOutsideFOV = false           -- Permite mirar fora do FOV
 Settings.AutoResetOnKill = true          -- Reset automático após kill
-Settings.MinAimHeightBelowCamera = 50    -- Altura mínima abaixo da câmera (evita chão)
+Settings.MinAimHeightBelowCamera = 50    -- Altura mínima abaixo da câmera
 
 -- ============================================================================
 -- AIMBOT BÁSICO
@@ -30,10 +32,12 @@ Settings.AimMethod = "Camera"            -- "Camera" ou "MouseMoveRel"
 Settings.SmoothingFactor = 5
 Settings.MaxDistance = 2000
 Settings.IgnoreTeamAimbot = true
+Settings.IgnoreTeam = true               -- Alias
 Settings.VisibleCheck = true
 Settings.MaxLockTime = 1.5
-Settings.UpdateRate = 0                  -- 0 = sem limite
+Settings.UpdateRate = 0
 Settings.ThreadedAim = true
+Settings.RestoreCameraOnStop = false
 
 -- ============================================================================
 -- FOV
@@ -67,24 +71,6 @@ Settings.IgnoreWalls = false
 Settings.AntiAimDetection = false
 
 -- ============================================================================
--- SILENT AIM
--- ============================================================================
-Settings.SilentAim = false
-Settings.SilentFOV = 500
-Settings.SilentHitChance = 100
-Settings.SilentHeadshotChance = 100
-Settings.SilentPrediction = true
-
--- ============================================================================
--- MAGIC BULLET
--- ============================================================================
-Settings.MagicBullet = false
-Settings.MagicBulletMethod = "Teleport"  -- "Teleport", "Curve", "Phase"
-Settings.MagicBulletSpeed = 9999
-Settings.MagicBulletIgnoreWalls = true
-Settings.MagicBulletAutoHit = true
-
--- ============================================================================
 -- TRIGGER BOT
 -- ============================================================================
 Settings.TriggerBot = false
@@ -101,6 +87,7 @@ Settings.TriggerHitChance = 100
 Settings.AutoFire = false
 Settings.AutoSwitch = false
 Settings.TargetSwitchDelay = 0.05
+Settings.SwitchDelay = 0.1
 Settings.InstantKill = false
 
 -- ============================================================================
@@ -110,8 +97,39 @@ Settings.LockImprovementThreshold = 0.8
 Settings.ShowTargetIndicator = true
 
 -- ============================================================================
--- FUNÇÃO DE MERGE COM SETTINGS GLOBAIS
+-- TP BULLET (NOVO)
 -- ============================================================================
+Settings.TPBullet = false
+Settings.TPBulletPosition = "Behind"     -- "Behind", "Above", "Side", "Front", "Custom"
+Settings.TPBulletDistance = 5
+Settings.TPBulletHeight = 0
+Settings.TPBulletReturn = true           -- Retornar após tiro
+Settings.TPBulletReturnDelay = 0.1
+Settings.TPBulletCooldown = 0.15
+Settings.TPBulletMaxDistance = 500
+Settings.TPBulletSafety = true           -- Verificação de segurança
+Settings.TPBulletCustomOffset = Vector3.new(0, 0, -5)
+
+-- ============================================================================
+-- ALIASES (Compatibilidade)
+-- ============================================================================
+Settings.EnhancedMode = false            -- Alias para RageMode
+Settings.UltraMode = false               -- Alias para UltraRageMode
+Settings.MaxMode = false                 -- Alias para GodRageMode
+Settings.HeadOnly = false                -- Alias para RageHeadOnly
+
+-- ============================================================================
+-- FUNÇÕES DE SYNC
+-- ============================================================================
+function Settings:SyncAliases()
+    -- Sincroniza aliases bidirecionalmente
+    self.EnhancedMode = self.RageMode
+    self.UltraMode = self.UltraRageMode
+    self.MaxMode = self.GodRageMode
+    self.HeadOnly = self.RageHeadOnly
+    self.IgnoreTeam = self.IgnoreTeamAimbot
+end
+
 function Settings:MergeWith(globalSettings)
     if not globalSettings then return end
     
@@ -123,6 +141,7 @@ function Settings:MergeWith(globalSettings)
         end
     end
     
+    self:SyncAliases()
     return globalSettings
 end
 
@@ -134,6 +153,80 @@ function Settings:SyncFrom(globalSettings)
             self[key] = value
         end
     end
+    
+    self:SyncAliases()
 end
 
-return Settings
+-- ============================================================================
+-- API DE CONFIGURAÇÃO
+-- ============================================================================
+local API = {}
+
+function API:SetRageMode(enabled)
+    Settings.RageMode = enabled
+    Settings.EnhancedMode = enabled
+    if not enabled then
+        Settings.UltraRageMode = false
+        Settings.GodRageMode = false
+        Settings.UltraMode = false
+        Settings.MaxMode = false
+    end
+end
+
+function API:SetUltraRageMode(enabled)
+    Settings.UltraRageMode = enabled
+    Settings.UltraMode = enabled
+    if enabled then
+        Settings.RageMode = true
+        Settings.EnhancedMode = true
+    end
+    if not enabled then
+        Settings.GodRageMode = false
+        Settings.MaxMode = false
+    end
+end
+
+function API:SetGodRageMode(enabled)
+    Settings.GodRageMode = enabled
+    Settings.MaxMode = enabled
+    if enabled then
+        Settings.RageMode = true
+        Settings.UltraRageMode = true
+        Settings.EnhancedMode = true
+        Settings.UltraMode = true
+    end
+end
+
+function API:SetTPBullet(enabled)
+    Settings.TPBullet = enabled
+end
+
+function API:SetTPBulletPosition(position)
+    local valid = {"Behind", "Above", "Side", "Front", "Custom"}
+    for _, v in ipairs(valid) do
+        if v == position then
+            Settings.TPBulletPosition = position
+            return true
+        end
+    end
+    return false
+end
+
+function API:GetRageLevel()
+    if Settings.GodRageMode then return 3 end
+    if Settings.UltraRageMode then return 2 end
+    if Settings.RageMode then return 1 end
+    return 0
+end
+
+function API:IsRageActive()
+    return Settings.RageMode or Settings.UltraRageMode or Settings.GodRageMode
+end
+
+-- ============================================================================
+-- EXPORT
+-- ============================================================================
+return {
+    Settings = Settings,
+    API = API,
+}

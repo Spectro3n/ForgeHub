@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB - ESP MODULE v2.1 (COMPATIBLE WITH MAIN.LUA)
+-- FORGEHUB - ESP MODULE v2.2 (CORRIGIDO - LIMPEZA E HIGHLIGHT FIX)
 -- ============================================================================
 
 local Core = _G.ForgeHubCore
@@ -15,7 +15,7 @@ local RunService = Core.RunService
 local LocalPlayer = Core.LocalPlayer
 local Camera = Core.Camera
 local CoreGui = Core.CoreGui
-local Settings = Core.Settings  -- USA DIRETAMENTE O SETTINGS DO MAIN.LUA
+local Settings = Core.Settings
 local State = Core.State
 local Notify = Core.Notify
 
@@ -49,7 +49,7 @@ local function SafeCall(func, name)
 end
 
 -- ============================================================================
--- DRAWING CREATION
+-- DRAWING CREATION (MELHORADO)
 -- ============================================================================
 local function CreateDrawing(drawingType, properties)
     if not DrawingAvailable then return nil end
@@ -63,6 +63,7 @@ local function CreateDrawing(drawingType, properties)
         return nil
     end
     
+    -- Aplicar propriedades de forma segura
     for prop, value in pairs(properties or {}) do
         pcall(function()
             obj[prop] = value
@@ -76,7 +77,18 @@ local function DestroyDrawing(obj)
     if obj then
         pcall(function()
             obj.Visible = false
+        end)
+        pcall(function()
             obj:Remove()
+        end)
+    end
+end
+
+-- ★ NOVO: Força visibilidade para false de forma segura
+local function ForceHideDrawing(obj)
+    if obj then
+        pcall(function()
+            obj.Visible = false
         end)
     end
 end
@@ -91,7 +103,6 @@ local function GetBoundingBox(character, anchor, distance)
     
     local cf, size
     
-    -- Para distâncias curtas, usa GetBoundingBox (mais preciso)
     if character and distance < 350 then
         local success
         success, cf, size = pcall(function()
@@ -102,15 +113,12 @@ local function GetBoundingBox(character, anchor, distance)
         end
     end
     
-    -- Fallback: estima baseado no HumanoidRootPart
     if not cf or not size then
         cf = anchor.CFrame
         size = Vector3.new(4, 5.5, 2)
-        -- Move para cima para cobrir o personagem
         cf = cf + Vector3.new(0, 0.5, 0)
     end
     
-    -- Calcula os 8 cantos do bounding box
     local corners = {}
     local halfSize = size / 2
     
@@ -127,7 +135,6 @@ local function GetBoundingBox(character, anchor, distance)
         end
     end
     
-    -- Projeta para tela
     local minX, minY = math.huge, math.huge
     local maxX, maxY = -math.huge, -math.huge
     local anyVisible = false
@@ -191,7 +198,7 @@ end
 local function RenderSkeletonLines(character, lines, color)
     if not character or not lines or #lines == 0 then
         for _, line in ipairs(lines or {}) do
-            if line then line.Visible = false end
+            ForceHideDrawing(line)
         end
         return
     end
@@ -234,27 +241,33 @@ local function RenderSkeletonLines(character, lines, color)
         lineIdx = lineIdx + 1
     end
     
-    -- Esconde linhas não usadas
     for i = lineIdx, #lines do
-        if lines[i] then
-            lines[i].Visible = false
-        end
+        ForceHideDrawing(lines[i])
+    end
+end
+
+-- ★ NOVO: Esconde todas as linhas do skeleton
+local function HideAllSkeletonLines(lines)
+    if not lines then return end
+    for _, line in ipairs(lines) do
+        ForceHideDrawing(line)
     end
 end
 
 -- ============================================================================
--- TEAM CHECK (Simplificado)
+-- TEAM CHECK
 -- ============================================================================
 local function AreSameTeam(player1, player2)
     if not player1 or not player2 then return false end
     
-    -- Verifica via SemanticEngine se disponível
     local SemanticEngine = Core.SemanticEngine
     if SemanticEngine and SemanticEngine.AreSameTeam then
-        return SemanticEngine:AreSameTeam(player1, player2)
+        local success, result = pcall(function()
+            return SemanticEngine:AreSameTeam(player1, player2)
+        end)
+        if success then return result end
     end
     
-    -- Fallback: Team padrão do Roblox
     if player1.Team and player2.Team then
         return player1.Team == player2.Team
     end
@@ -265,10 +278,47 @@ end
 -- ============================================================================
 -- ESP STORAGE
 -- ============================================================================
-local ESPData = {} -- player -> data
+local ESPData = {}
+
+-- ★ NOVO: Cache de settings para detectar mudanças
+local SettingsCache = {
+    ESPEnabled = nil,
+    ShowBox = nil,
+    ShowName = nil,
+    ShowDistance = nil,
+    ShowHealthBar = nil,
+    ShowHighlight = nil,
+    ShowSkeleton = nil,
+    IgnoreTeamESP = nil,
+}
+
+local function SettingsChanged()
+    local changed = false
+    
+    local checks = {
+        {"ESPEnabled", Settings.ESPEnabled},
+        {"ShowBox", Settings.ShowBox},
+        {"ShowName", Settings.ShowName},
+        {"ShowDistance", Settings.ShowDistance},
+        {"ShowHealthBar", Settings.ShowHealthBar},
+        {"ShowHighlight", Settings.ShowHighlight},
+        {"ShowSkeleton", Settings.Drawing and Settings.Drawing.Skeleton},
+        {"IgnoreTeamESP", Settings.IgnoreTeamESP},
+    }
+    
+    for _, check in ipairs(checks) do
+        local key, value = check[1], check[2]
+        if SettingsCache[key] ~= value then
+            SettingsCache[key] = value
+            changed = true
+        end
+    end
+    
+    return changed
+end
 
 -- ============================================================================
--- CREATE ESP FOR PLAYER
+-- CREATE ESP FOR PLAYER (MELHORADO)
 -- ============================================================================
 local function CreateESP(player)
     if ESPData[player] then return ESPData[player] end
@@ -326,11 +376,15 @@ local function CreateESP(player)
             ZIndex = 3,
         }),
         
-        -- Skeleton Lines (máximo 16 para R15)
+        -- Skeleton Lines
         Skeleton = {},
         
-        -- Highlight (Instance)
+        -- Highlight
         Highlight = nil,
+        
+        -- ★ NOVO: Estado interno
+        _lastCharacter = nil,
+        _highlightNeedsUpdate = true,
     }
     
     -- Criar skeleton lines
@@ -351,6 +405,8 @@ local function CreateESP(player)
         hl.Name = "ForgeESP_" .. player.Name
         hl.Enabled = false
         hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.FillTransparency = 0.5
+        hl.OutlineTransparency = 0
         hl.Parent = CoreGui
         data.Highlight = hl
     end)
@@ -360,13 +416,13 @@ local function CreateESP(player)
 end
 
 -- ============================================================================
--- REMOVE ESP FOR PLAYER
+-- REMOVE ESP FOR PLAYER (MELHORADO)
 -- ============================================================================
 local function RemoveESP(player)
     local data = ESPData[player]
     if not data then return end
     
-    -- Destroy drawings
+    -- ★ Destruir TODOS os drawings de forma garantida
     DestroyDrawing(data.Box)
     DestroyDrawing(data.BoxOutline)
     DestroyDrawing(data.Name)
@@ -374,54 +430,114 @@ local function RemoveESP(player)
     DestroyDrawing(data.HealthBg)
     DestroyDrawing(data.HealthBar)
     
+    -- Destruir skeleton
     for _, line in ipairs(data.Skeleton or {}) do
         DestroyDrawing(line)
     end
+    data.Skeleton = {}
     
-    -- Destroy highlight
+    -- ★ Destruir Highlight de forma garantida
     if data.Highlight then
+        pcall(function()
+            data.Highlight.Enabled = false
+            data.Highlight.Adornee = nil
+        end)
         pcall(function()
             data.Highlight:Destroy()
         end)
+        data.Highlight = nil
     end
     
     ESPData[player] = nil
 end
 
 -- ============================================================================
--- HIDE ALL ESP ELEMENTS
+-- ★ HIDE ALL ESP ELEMENTS (CORRIGIDO - GARANTIDO)
 -- ============================================================================
 local function HideESP(data)
     if not data then return end
     
-    if data.Box then data.Box.Visible = false end
-    if data.BoxOutline then data.BoxOutline.Visible = false end
-    if data.Name then data.Name.Visible = false end
-    if data.Distance then data.Distance.Visible = false end
-    if data.HealthBg then data.HealthBg.Visible = false end
-    if data.HealthBar then data.HealthBar.Visible = false end
+    -- ★ Força TODOS os elementos para invisível
+    ForceHideDrawing(data.Box)
+    ForceHideDrawing(data.BoxOutline)
+    ForceHideDrawing(data.Name)
+    ForceHideDrawing(data.Distance)
+    ForceHideDrawing(data.HealthBg)
+    ForceHideDrawing(data.HealthBar)
     
-    for _, line in ipairs(data.Skeleton or {}) do
-        if line then line.Visible = false end
-    end
+    -- ★ Esconde TODAS as linhas do skeleton
+    HideAllSkeletonLines(data.Skeleton)
     
+    -- ★ Desativa Highlight de forma garantida
     if data.Highlight then
-        data.Highlight.Enabled = false
+        pcall(function()
+            data.Highlight.Enabled = false
+        end)
     end
 end
 
 -- ============================================================================
--- UPDATE ESP FOR PLAYER
+-- ★ UPDATE HIGHLIGHT (NOVO - CORRIGE PLAYERS EXISTENTES)
+-- ============================================================================
+local function UpdateHighlight(data, player, character, distance, shouldShow)
+    if not data.Highlight then return end
+    
+    -- ★ Se não deve mostrar, desativa e sai
+    if not shouldShow then
+        pcall(function()
+            data.Highlight.Enabled = false
+        end)
+        return
+    end
+    
+    -- ★ Limita highlight a distância máxima
+    local maxDist = Settings.ESP and Settings.ESP.HighlightMaxDistance or 500
+    if distance > maxDist then
+        pcall(function()
+            data.Highlight.Enabled = false
+        end)
+        return
+    end
+    
+    -- ★ Verifica se character mudou ou precisa update
+    local needsUpdate = data._highlightNeedsUpdate or 
+                        data._lastCharacter ~= character or
+                        data.Highlight.Adornee ~= character
+    
+    if needsUpdate then
+        pcall(function()
+            data.Highlight.Adornee = character
+            data._lastCharacter = character
+            data._highlightNeedsUpdate = false
+        end)
+    end
+    
+    -- ★ Atualiza cores e propriedades
+    pcall(function()
+        data.Highlight.FillColor = Settings.HighlightFillColor or Color3.fromRGB(255, 0, 0)
+        data.Highlight.OutlineColor = Settings.HighlightOutlineColor or Color3.fromRGB(255, 255, 255)
+        data.Highlight.FillTransparency = Settings.HighlightTransparency or 0.5
+        data.Highlight.OutlineTransparency = 0
+        data.Highlight.Enabled = true
+    end)
+end
+
+-- ============================================================================
+-- ★ UPDATE ESP FOR PLAYER (COMPLETAMENTE REESCRITO)
 -- ============================================================================
 local function UpdateESP(player, data)
-    -- ===== VERIFICAÇÃO GLOBAL: ESP HABILITADO? =====
-    -- IMPORTANTE: Usa Settings.ESPEnabled do main.lua
-    if not Settings.ESPEnabled then
+    -- ===== VERIFICAÇÃO 1: ESP GLOBAL HABILITADO? =====
+    local espEnabled = Settings.ESPEnabled
+    if Settings.ESP and Settings.ESP.Enabled ~= nil then
+        espEnabled = Settings.ESP.Enabled
+    end
+    
+    if not espEnabled then
         HideESP(data)
         return
     end
     
-    -- ===== OBTER CHARACTER E VALIDAR =====
+    -- ===== VERIFICAÇÃO 2: CHARACTER VÁLIDO =====
     local character = player.Character
     if not character then
         HideESP(data)
@@ -439,7 +555,7 @@ local function UpdateESP(player, data)
     
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     
-    -- ===== VERIFICAR SE ESTÁ MORTO =====
+    -- ===== VERIFICAÇÃO 3: ESTÁ MORTO? =====
     if humanoid and humanoid.Health <= 0 then
         HideESP(data)
         return
@@ -450,16 +566,24 @@ local function UpdateESP(player, data)
     local targetPos = anchor.Position
     local distance = (targetPos - camPos).Magnitude
     
-    -- ===== VERIFICAR DISTÂNCIA MÁXIMA =====
-    -- Usa Settings.ESPMaxDistance do main.lua
-    if distance > (Settings.ESPMaxDistance or 1000) then
+    -- ===== VERIFICAÇÃO 4: DISTÂNCIA MÁXIMA =====
+    local maxDistance = Settings.ESPMaxDistance or 1000
+    if Settings.ESP and Settings.ESP.MaxDistance then
+        maxDistance = Settings.ESP.MaxDistance
+    end
+    
+    if distance > maxDistance then
         HideESP(data)
         return
     end
     
-    -- ===== VERIFICAR TEAM =====
-    -- Usa Settings.IgnoreTeamESP do main.lua
-    if Settings.IgnoreTeamESP and AreSameTeam(LocalPlayer, player) then
+    -- ===== VERIFICAÇÃO 5: TEAM CHECK =====
+    local ignoreTeam = Settings.IgnoreTeamESP
+    if Settings.ESP and Settings.ESP.IgnoreTeam ~= nil then
+        ignoreTeam = Settings.ESP.IgnoreTeam
+    end
+    
+    if ignoreTeam and AreSameTeam(LocalPlayer, player) then
         HideESP(data)
         return
     end
@@ -473,18 +597,20 @@ local function UpdateESP(player, data)
     end
     
     -- =========================================================================
-    -- RENDERIZAR ELEMENTOS (USA SETTINGS DO MAIN.LUA)
+    -- ★ RENDERIZAR ELEMENTOS (CADA UM VERIFICA SEU PRÓPRIO SETTING)
     -- =========================================================================
     
     -- ===== BOX =====
-    -- Usa Settings.ShowBox do main.lua
-    if Settings.ShowBox then
-        if data.Box then
-            data.Box.Size = Vector2.new(w, h)
-            data.Box.Position = Vector2.new(x, y)
-            data.Box.Color = Settings.BoxColor or Color3.fromRGB(255, 170, 60)
-            data.Box.Visible = true
-        end
+    local showBox = Settings.ShowBox
+    if Settings.ESP and Settings.ESP.ShowBox ~= nil then
+        showBox = Settings.ESP.ShowBox
+    end
+    
+    if showBox and data.Box then
+        data.Box.Size = Vector2.new(w, h)
+        data.Box.Position = Vector2.new(x, y)
+        data.Box.Color = Settings.BoxColor or Color3.fromRGB(255, 170, 60)
+        data.Box.Visible = true
         
         if data.BoxOutline then
             data.BoxOutline.Size = Vector2.new(w + 2, h + 2)
@@ -492,40 +618,48 @@ local function UpdateESP(player, data)
             data.BoxOutline.Visible = true
         end
     else
-        -- IMPORTANTE: Esconde quando desativado!
-        if data.Box then data.Box.Visible = false end
-        if data.BoxOutline then data.BoxOutline.Visible = false end
+        -- ★ FORÇA esconder quando desativado
+        ForceHideDrawing(data.Box)
+        ForceHideDrawing(data.BoxOutline)
     end
     
     -- ===== NAME =====
-    -- Usa Settings.ShowName do main.lua
-    if Settings.ShowName then
-        if data.Name then
-            data.Name.Text = player.Name
-            data.Name.Position = Vector2.new(x + w/2, y - 16)
-            data.Name.Color = Color3.new(1, 1, 1)
-            data.Name.Visible = true
-        end
+    local showName = Settings.ShowName
+    if Settings.ESP and Settings.ESP.ShowName ~= nil then
+        showName = Settings.ESP.ShowName
+    end
+    
+    if showName and data.Name then
+        data.Name.Text = player.Name
+        data.Name.Position = Vector2.new(x + w/2, y - 16)
+        data.Name.Color = Color3.new(1, 1, 1)
+        data.Name.Visible = true
     else
-        if data.Name then data.Name.Visible = false end
+        ForceHideDrawing(data.Name)
     end
     
     -- ===== DISTANCE =====
-    -- Usa Settings.ShowDistance do main.lua
-    if Settings.ShowDistance then
-        if data.Distance then
-            data.Distance.Text = string.format("[%dm]", math.floor(distance))
-            data.Distance.Position = Vector2.new(x + w/2, y + h + 2)
-            data.Distance.Color = Color3.fromRGB(200, 200, 200)
-            data.Distance.Visible = true
-        end
+    local showDistance = Settings.ShowDistance
+    if Settings.ESP and Settings.ESP.ShowDistance ~= nil then
+        showDistance = Settings.ESP.ShowDistance
+    end
+    
+    if showDistance and data.Distance then
+        data.Distance.Text = string.format("[%dm]", math.floor(distance))
+        data.Distance.Position = Vector2.new(x + w/2, y + h + 2)
+        data.Distance.Color = Color3.fromRGB(200, 200, 200)
+        data.Distance.Visible = true
     else
-        if data.Distance then data.Distance.Visible = false end
+        ForceHideDrawing(data.Distance)
     end
     
     -- ===== HEALTH BAR =====
-    -- Usa Settings.ShowHealthBar do main.lua
-    if Settings.ShowHealthBar and humanoid then
+    local showHealthBar = Settings.ShowHealthBar
+    if Settings.ESP and Settings.ESP.ShowHealthBar ~= nil then
+        showHealthBar = Settings.ESP.ShowHealthBar
+    end
+    
+    if showHealthBar and humanoid and data.HealthBg and data.HealthBar then
         local healthPct = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
         
         local barWidth = 4
@@ -533,72 +667,61 @@ local function UpdateESP(player, data)
         local barY = y
         local barHeight = h
         
-        -- Background
-        if data.HealthBg then
-            data.HealthBg.Size = Vector2.new(barWidth, barHeight)
-            data.HealthBg.Position = Vector2.new(barX, barY)
-            data.HealthBg.Visible = true
-        end
+        data.HealthBg.Size = Vector2.new(barWidth, barHeight)
+        data.HealthBg.Position = Vector2.new(barX, barY)
+        data.HealthBg.Visible = true
         
-        -- Health fill (de baixo para cima)
-        if data.HealthBar then
-            local fillHeight = barHeight * healthPct
-            data.HealthBar.Size = Vector2.new(barWidth - 2, fillHeight)
-            data.HealthBar.Position = Vector2.new(barX + 1, barY + barHeight - fillHeight)
-            
-            -- Cor: Verde -> Amarelo -> Vermelho
-            local r, g
-            if healthPct > 0.5 then
-                r = (1 - healthPct) * 2
-                g = 1
-            else
-                r = 1
-                g = healthPct * 2
-            end
-            data.HealthBar.Color = Color3.new(r, g, 0)
-            data.HealthBar.Visible = true
+        local fillHeight = barHeight * healthPct
+        data.HealthBar.Size = Vector2.new(barWidth - 2, fillHeight)
+        data.HealthBar.Position = Vector2.new(barX + 1, barY + barHeight - fillHeight)
+        
+        local r, g
+        if healthPct > 0.5 then
+            r = (1 - healthPct) * 2
+            g = 1
+        else
+            r = 1
+            g = healthPct * 2
         end
+        data.HealthBar.Color = Color3.new(r, g, 0)
+        data.HealthBar.Visible = true
     else
-        if data.HealthBg then data.HealthBg.Visible = false end
-        if data.HealthBar then data.HealthBar.Visible = false end
+        ForceHideDrawing(data.HealthBg)
+        ForceHideDrawing(data.HealthBar)
     end
     
     -- ===== SKELETON =====
-    -- Usa Settings.Drawing.Skeleton do main.lua
-    local showSkeleton = Settings.Drawing and Settings.Drawing.Skeleton
-    local skeletonMaxDist = Settings.Drawing and Settings.Drawing.SkeletonMaxDistance or 250
+    local showSkeleton = false
+    local skeletonMaxDist = 250
+    
+    if Settings.Drawing then
+        showSkeleton = Settings.Drawing.Skeleton
+        skeletonMaxDist = Settings.Drawing.SkeletonMaxDistance or 250
+    end
+    if Settings.ESP then
+        if Settings.ESP.ShowSkeleton ~= nil then
+            showSkeleton = Settings.ESP.ShowSkeleton
+        end
+        if Settings.ESP.SkeletonMaxDistance then
+            skeletonMaxDist = Settings.ESP.SkeletonMaxDistance
+        end
+    end
     
     if showSkeleton and distance <= skeletonMaxDist then
         local skeletonColor = Settings.SkeletonColor or Color3.new(1, 1, 1)
         RenderSkeletonLines(character, data.Skeleton, skeletonColor)
     else
-        for _, line in ipairs(data.Skeleton or {}) do
-            if line then line.Visible = false end
-        end
+        HideAllSkeletonLines(data.Skeleton)
     end
     
     -- ===== HIGHLIGHT =====
-    -- Usa Settings.ShowHighlight do main.lua
-    if Settings.ShowHighlight and data.Highlight then
-        -- Limita highlight a 500m
-        if distance <= 500 then
-            if data.Highlight.Adornee ~= character then
-                data.Highlight.Adornee = character
-            end
-            
-            data.Highlight.FillColor = Settings.HighlightFillColor or Color3.fromRGB(255, 0, 0)
-            data.Highlight.OutlineColor = Settings.HighlightOutlineColor or Color3.fromRGB(255, 255, 255)
-            data.Highlight.FillTransparency = Settings.HighlightTransparency or 0.5
-            data.Highlight.OutlineTransparency = 0
-            data.Highlight.Enabled = true
-        else
-            data.Highlight.Enabled = false
-        end
-    else
-        if data.Highlight then
-            data.Highlight.Enabled = false
-        end
+    local showHighlight = Settings.ShowHighlight
+    if Settings.ESP and Settings.ESP.ShowHighlight ~= nil then
+        showHighlight = Settings.ESP.ShowHighlight
     end
+    
+    -- ★ NOVO: Chama função dedicada para Highlight
+    UpdateHighlight(data, player, character, distance, showHighlight)
 end
 
 -- ============================================================================
@@ -628,21 +751,23 @@ local function InitLocalSkeleton()
 end
 
 local function UpdateLocalSkeleton()
-    -- Usa Settings.Drawing.LocalSkeleton do main.lua
-    local showLocal = Settings.Drawing and Settings.Drawing.LocalSkeleton
+    local showLocal = false
+    
+    if Settings.Drawing and Settings.Drawing.LocalSkeleton then
+        showLocal = true
+    end
+    if Settings.ESP and Settings.ESP.ShowLocalSkeleton then
+        showLocal = true
+    end
     
     if not showLocal then
-        for _, line in ipairs(LocalSkeletonData.Lines) do
-            if line then line.Visible = false end
-        end
+        HideAllSkeletonLines(LocalSkeletonData.Lines)
         return
     end
     
     local character = LocalPlayer and LocalPlayer.Character
     if not character then
-        for _, line in ipairs(LocalSkeletonData.Lines) do
-            if line then line.Visible = false end
-        end
+        HideAllSkeletonLines(LocalSkeletonData.Lines)
         return
     end
     
@@ -651,9 +776,12 @@ local function UpdateLocalSkeleton()
 end
 
 -- ============================================================================
--- ESP MODULE API
+-- ★ ESP MODULE API (MELHORADO)
 -- ============================================================================
-local ESP = {}
+local ESP = {
+    _lastSettingsCheck = 0,
+    _settingsCheckInterval = 0.5,
+}
 
 function ESP:CreatePlayerESP(player)
     return CreateESP(player)
@@ -686,7 +814,39 @@ function ESP:UpdateAll()
     end
 end
 
+-- ★ NOVO: Força refresh de todos os ESPs
+function ESP:ForceRefresh()
+    for player, data in pairs(ESPData) do
+        if data then
+            -- Marca highlight para update
+            data._highlightNeedsUpdate = true
+            
+            -- Força recriação do Highlight se necessário
+            if data.Highlight then
+                pcall(function()
+                    data.Highlight.Adornee = nil
+                end)
+            end
+        end
+    end
+    
+    -- Atualiza todos
+    self:UpdateAll()
+end
+
+-- ★ NOVO: Esconde TODOS os ESPs imediatamente
+function ESP:HideAll()
+    for player, data in pairs(ESPData) do
+        HideESP(data)
+    end
+    HideAllSkeletonLines(LocalSkeletonData.Lines)
+end
+
 function ESP:CleanupAll()
+    -- Esconde tudo primeiro
+    self:HideAll()
+    
+    -- Remove todos os players
     for player, _ in pairs(ESPData) do
         RemoveESP(player)
     end
@@ -699,6 +859,35 @@ function ESP:CleanupAll()
     LocalSkeletonData.Initialized = false
 end
 
+-- ★ NOVO: Recria ESP para um player (fix para players existentes)
+function ESP:RecreatePlayerESP(player)
+    if player == LocalPlayer then return end
+    
+    -- Remove antigo
+    RemoveESP(player)
+    
+    -- Cria novo
+    local data = CreateESP(player)
+    
+    -- Força update do highlight
+    if data then
+        data._highlightNeedsUpdate = true
+    end
+    
+    return data
+end
+
+-- ★ NOVO: Recria todos os ESPs
+function ESP:RecreateAll()
+    local players = Players:GetPlayers()
+    
+    for _, player in ipairs(players) do
+        if player ~= LocalPlayer then
+            self:RecreatePlayerESP(player)
+        end
+    end
+end
+
 function ESP:Initialize()
     if not DrawingAvailable then
         warn("[ESP] Drawing library não disponível - ESP desabilitado")
@@ -708,10 +897,13 @@ function ESP:Initialize()
     -- Inicializa local skeleton
     InitLocalSkeleton()
     
-    -- Cria ESP para jogadores existentes
+    -- ★ NOVO: Cria ESP para jogadores existentes COM highlight fix
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
-            CreateESP(player)
+            local data = CreateESP(player)
+            if data then
+                data._highlightNeedsUpdate = true
+            end
         end
     end
     
@@ -725,88 +917,114 @@ function ESP:Initialize()
         end
     end)
     
+    -- ★ NOVO: Loop de verificação de settings
+    task.spawn(function()
+        while true do
+            task.wait(0.3)
+            
+            if SettingsChanged() then
+                -- Se ESP foi desativado, esconde tudo imediatamente
+                local espEnabled = Settings.ESPEnabled
+                if Settings.ESP and Settings.ESP.Enabled ~= nil then
+                    espEnabled = Settings.ESP.Enabled
+                end
+                
+                if not espEnabled then
+                    self:HideAll()
+                else
+                    -- Force refresh para aplicar novas settings
+                    self:ForceRefresh()
+                end
+            end
+        end
+    end)
+    
     -- Eventos de jogadores
     Players.PlayerAdded:Connect(function(player)
         task.wait(1)
-        CreateESP(player)
+        local data = CreateESP(player)
+        if data then
+            data._highlightNeedsUpdate = true
+        end
     end)
     
     Players.PlayerRemoving:Connect(function(player)
         RemoveESP(player)
     end)
     
+    -- ★ NOVO: Observa CharacterAdded para fix do Highlight
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            player.CharacterAdded:Connect(function(character)
+                task.wait(0.2)
+                local data = ESPData[player]
+                if data then
+                    data._highlightNeedsUpdate = true
+                    data._lastCharacter = nil
+                    
+                    -- Reseta Adornee
+                    if data.Highlight then
+                        pcall(function()
+                            data.Highlight.Adornee = character
+                        end)
+                    end
+                end
+            end)
+        end
+    end
+    
     print("[ESP] Inicializado com sucesso!")
     print("[ESP] Drawing disponível: " .. tostring(DrawingAvailable))
-    print("[ESP] Configurações atuais:")
-    print("  - ESPEnabled: " .. tostring(Settings.ESPEnabled))
-    print("  - ShowBox: " .. tostring(Settings.ShowBox))
-    print("  - ShowName: " .. tostring(Settings.ShowName))
-    print("  - ShowDistance: " .. tostring(Settings.ShowDistance))
-    print("  - ShowHealthBar: " .. tostring(Settings.ShowHealthBar))
-    print("  - ShowHighlight: " .. tostring(Settings.ShowHighlight))
-    print("  - Skeleton: " .. tostring(Settings.Drawing and Settings.Drawing.Skeleton))
     
     return true
 end
 
 function ESP:Debug()
-    print("\n========== ESP DEBUG ==========")
+    print("\n========== ESP DEBUG v2.2 ==========")
     print("Drawing Library: " .. (DrawingAvailable and "OK" or "FALHOU"))
     
-    print("\n--- Settings (do main.lua) ---")
+    print("\n--- Settings Atuais ---")
     print("  ESPEnabled: " .. tostring(Settings.ESPEnabled))
     print("  ShowBox: " .. tostring(Settings.ShowBox))
     print("  ShowName: " .. tostring(Settings.ShowName))
     print("  ShowDistance: " .. tostring(Settings.ShowDistance))
     print("  ShowHealthBar: " .. tostring(Settings.ShowHealthBar))
     print("  ShowHighlight: " .. tostring(Settings.ShowHighlight))
-    print("  IgnoreTeamESP: " .. tostring(Settings.IgnoreTeamESP))
-    print("  ESPMaxDistance: " .. tostring(Settings.ESPMaxDistance))
     
-    if Settings.Drawing then
-        print("  Drawing.Skeleton: " .. tostring(Settings.Drawing.Skeleton))
-        print("  Drawing.LocalSkeleton: " .. tostring(Settings.Drawing.LocalSkeleton))
-        print("  Drawing.SkeletonMaxDistance: " .. tostring(Settings.Drawing.SkeletonMaxDistance))
+    if Settings.ESP then
+        print("  ESP.Enabled: " .. tostring(Settings.ESP.Enabled))
+        print("  ESP.ShowSkeleton: " .. tostring(Settings.ESP.ShowSkeleton))
     end
     
     print("\n--- ESP Storage ---")
     local count = 0
     for player, data in pairs(ESPData) do
         count = count + 1
+        local hlStatus = "N/A"
+        if data.Highlight then
+            local adornee = data.Highlight.Adornee
+            local enabled = data.Highlight.Enabled
+            hlStatus = string.format("Enabled=%s, Adornee=%s", 
+                tostring(enabled), 
+                adornee and adornee.Name or "nil")
+        end
+        
         print(string.format("  %s:", player.Name))
-        print("    Box: " .. (data.Box and "OK" or "FALHOU"))
-        print("    Name: " .. (data.Name and "OK" or "FALHOU"))
-        print("    Distance: " .. (data.Distance and "OK" or "FALHOU"))
-        print("    HealthBar: " .. (data.HealthBar and "OK" or "FALHOU"))
-        print("    Skeleton: " .. tostring(#data.Skeleton) .. " linhas")
-        print("    Highlight: " .. (data.Highlight and "OK" or "FALHOU"))
+        print("    Box.Visible: " .. tostring(data.Box and data.Box.Visible))
+        print("    Name.Visible: " .. tostring(data.Name and data.Name.Visible))
+        print("    Highlight: " .. hlStatus)
+        print("    _highlightNeedsUpdate: " .. tostring(data._highlightNeedsUpdate))
     end
-    print("Total jogadores rastreados: " .. count)
+    print("Total jogadores: " .. count)
     
-    print("\n--- Teste de Criação ---")
-    local testLine = CreateDrawing("Line", {})
-    print("  Line: " .. (testLine and "OK" or "FALHOU"))
-    if testLine then DestroyDrawing(testLine) end
-    
-    local testText = CreateDrawing("Text", {})
-    print("  Text: " .. (testText and "OK" or "FALHOU"))
-    if testText then DestroyDrawing(testText) end
-    
-    local testSquare = CreateDrawing("Square", {})
-    print("  Square: " .. (testSquare and "OK" or "FALHOU"))
-    if testSquare then DestroyDrawing(testSquare) end
-    
-    print("================================\n")
+    print("=====================================\n")
 end
 
 -- ============================================================================
 -- EXPORT
 -- ============================================================================
 
--- Registra no Core
 Core.ESP = ESP
-
--- Compatibilidade com State.DrawingESP
 State.DrawingESP = ESPData
 
 return ESP

@@ -597,103 +597,6 @@ function UI:CreateInterface()
         end
     })
 
-    RageTab:CreateSection("🎯 SILENT AIM")
-
-    RageTab:CreateToggle({
-        Name = "👻 Silent Aim",
-        CurrentValue = Settings.SilentAim or false,
-        Callback = function(v)
-            Settings.SilentAim = v
-            if Core.Aimbot and Core.Aimbot.SetSilentAim then
-                Core.Aimbot.SetSilentAim(v)
-            end
-        end
-    })
-
-    RageTab:CreateToggle({
-        Name = "⭕ Mostrar Silent FOV",
-        CurrentValue = Settings.ShowSilentFOV or false,
-        Callback = function(v)
-            Settings.ShowSilentFOV = v
-        end
-    })
-
-    RageTab:CreateSlider({
-        Name = "📐 Silent FOV",
-        Range = {50, 2000},
-        Increment = 50,
-        CurrentValue = Settings.SilentFOV or 500,
-        Callback = function(v)
-            Settings.SilentFOV = v
-            if Core.Aimbot and Core.Aimbot.SetSilentFOV then
-                Core.Aimbot.SetSilentFOV(v)
-            end
-        end
-    })
-
-    RageTab:CreateSlider({
-        Name = "🎲 Hit Chance (%)",
-        Range = {1, 100},
-        Increment = 1,
-        CurrentValue = Settings.SilentHitChance or 100,
-        Callback = function(v)
-            Settings.SilentHitChance = v
-        end
-    })
-
-    RageTab:CreateSlider({
-        Name = "🎯 Headshot Chance (%)",
-        Range = {1, 100},
-        Increment = 1,
-        CurrentValue = Settings.SilentHeadshotChance or 100,
-        Callback = function(v)
-            Settings.SilentHeadshotChance = v
-        end
-    })
-
-    RageTab:CreateSection("✨ MAGIC BULLET")
-
-    RageTab:CreateParagraph({
-        Title = "✨ Magic Bullet",
-        Content = "Faz sua bala atravessar paredes\ne acertar o inimigo automaticamente!"
-    })
-
-    RageTab:CreateToggle({
-        Name = "✨ Ativar Magic Bullet",
-        CurrentValue = Settings.MagicBullet or false,
-        Callback = function(v)
-            Settings.MagicBullet = v
-            if Core.Aimbot and Core.Aimbot.SetMagicBullet then
-                Core.Aimbot.SetMagicBullet(v)
-            end
-        end
-    })
-
-    RageTab:CreateDropdown({
-        Name = "🔮 Método Magic Bullet",
-        Options = {"Teleport", "Curve", "Phase"},
-        CurrentOption = {Settings.MagicBulletMethod or "Teleport"},
-        Callback = function(Option)
-            Settings.MagicBulletMethod = HandleDropdown(Option)
-        end
-    })
-
-    RageTab:CreateToggle({
-        Name = "💥 Auto Hit (Força registro)",
-        CurrentValue = Settings.MagicBulletAutoHit or true,
-        Callback = function(v)
-            Settings.MagicBulletAutoHit = v
-        end
-    })
-
-    RageTab:CreateToggle({
-        Name = "🧱 Ignorar Paredes",
-        CurrentValue = Settings.IgnoreWalls or false,
-        Callback = function(v)
-            Settings.IgnoreWalls = v
-        end
-    })
-
     RageTab:CreateSection("⚡ TRIGGER BOT")
 
     RageTab:CreateToggle({
@@ -823,15 +726,108 @@ function UI:CreateInterface()
             end
         end,
     })
+    
+    RageTab:CreateToggle({
+        Name = "🚀 Ativar TP Bullet",
+        CurrentValue = Settings.TPBullet or false,
+        Callback = function(v)
+            Settings.TPBullet = v
+            if Core.Aimbot and Core.Aimbot.SetTPBullet then
+                Core.Aimbot.SetTPBullet(v)
+            end
+        end
+    })
+
+    RageTab:CreateDropdown({
+        Name = "📍 Posição do TP",
+        Options = {"Behind", "Above", "Side", "Front", "Custom"},
+        CurrentOption = {Settings.TPBulletPosition or "Behind"},
+        Callback = function(Option)
+            local selected = HandleDropdown(Option)
+            Settings.TPBulletPosition = selected
+            if Core.Aimbot and Core.Aimbot.SetTPBulletPosition then
+                Core.Aimbot.SetTPBulletPosition(selected)
+            end
+        end
+    })
+
+    RageTab:CreateSlider({
+        Name = "📏 Distância do Alvo",
+        Range = {1, 30},
+        Increment = 1,
+        CurrentValue = Settings.TPBulletDistance or 5,
+        Callback = function(v)
+            Settings.TPBulletDistance = v
+            if Core.Aimbot and Core.Aimbot.SetTPBulletDistance then
+                Core.Aimbot.SetTPBulletDistance(v)
+            end
+        end
+    })
+
+    RageTab:CreateSlider({
+        Name = "📐 Altura",
+        Range = {-10, 15},
+        Increment = 1,
+        CurrentValue = Settings.TPBulletHeight or 0,
+        Callback = function(v)
+            Settings.TPBulletHeight = v
+            if Core.Aimbot and Core.Aimbot.SetTPBulletHeight then
+                Core.Aimbot.SetTPBulletHeight(v)
+            end
+        end
+    })
+
+    RageTab:CreateSection("⚙️ Configurações")
+
+    RageTab:CreateToggle({
+        Name = "↩️ Retornar Após Tiro",
+        CurrentValue = Settings.TPBulletReturn or true,
+        Callback = function(v)
+            Settings.TPBulletReturn = v
+            if Core.Aimbot and Core.Aimbot.SetTPBulletReturn then
+                Core.Aimbot.SetTPBulletReturn(v)
+            end
+        end
+    })
+
+    RageTab:CreateSlider({
+        Name = "⏱️ Delay de Retorno",
+        Range = {0, 0.5},
+        Increment = 0.05,
+        CurrentValue = Settings.TPBulletReturnDelay or 0.1,
+        Callback = function(v)
+            Settings.TPBulletReturnDelay = v
+        end
+    })
 
     RageTab:CreateButton({
-        Name = "🐛 Debug Aimbot",
+        Name = "↩️ Forçar Retorno",
         Callback = function()
-            if Core.Aimbot and Core.Aimbot.Debug then
-                Core.Aimbot.Debug()
-                Notify("Debug", "Verifique o console (F9)")
+            if Core.Aimbot and Core.Aimbot.ForceTPReturn then
+                Core.Aimbot.ForceTPReturn()
+                Notify("TP Bullet", "Retornado à posição original")
             end
-        end,
+        end
+    })
+
+    RageTab:CreateSection("⚠️ Segurança")
+
+    RageTab:CreateToggle({
+        Name = "🛡️ Verificação de Segurança",
+        CurrentValue = true,
+        Callback = function(v)
+            Settings.TPBulletSafety = v
+        end
+    })
+
+    RageTab:CreateSlider({
+     Name = "📏 Distância Máxima de TP",
+        Range = {50, 1000},
+        Increment = 50,
+        CurrentValue = 500,
+        Callback = function(v)
+            Settings.TPBulletMaxDistance = v
+        end
     })
 
     RageTab:CreateButton({
