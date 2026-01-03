@@ -1,55 +1,160 @@
 -- ============================================================================
--- FORGEHUB - AIMBOT LEGIT MODULE v4.7 (FIXED)
--- Usa Settings global passado pelo main
+-- FORGEHUB - AIMBOT LEGIT MODULE v4.8 (ROBUST)
+-- Versão com fallbacks internos para funcionar em mais jogos
 -- ============================================================================
 
 local AimbotLegit = {
     _init = false,
     _active = false,
-    _origCF = nil,
+    Active = false,
     _hasMMR = false,
-    _lastPos = nil,
     _validPos = nil,
     _history = {},
-    _smoothHist = {},
-    _maxHist = 5,
     
     _holdUntil = nil,
-    _controlled = false,
     _prevType = nil,
-    _prevSubject = nil,
     _prevCF = nil,
-    _lerpConn = nil,
     
     _failCount = {},
     _maxFails = 3,
     
     _predHistory = {},
     _lastPredUpdate = {},
+    
+    -- Debug
+    _debugMode = false,
+    _lastDebug = 0,
 }
 
 -- ============================================================================
 -- SERVICES
 -- ============================================================================
-local ServiceCache = {}
-
-local function GetService(name)
-    if ServiceCache[name] then return ServiceCache[name] end
-    local success, service = pcall(function() return game:GetService(name) end)
-    if success and service then ServiceCache[name] = service end
-    return service
-end
-
-local function GetRunService() return GetService("RunService") end
-local function GetPlayers() return GetService("Players") end
-local function GetUIS() return GetService("UserInputService") end
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
 
 -- ============================================================================
--- DEPENDENCIES (PASSADAS PELO MAIN)
+-- DEPENDENCIES
 -- ============================================================================
 local Utils = nil
-local Settings = nil  -- SETTINGS GLOBAL DO MAIN
+local Settings = nil
 local LocalPlayer = nil
+local Camera = nil
+
+-- ============================================================================
+-- INTERNAL HELPERS (FALLBACKS)
+-- ============================================================================
+
+-- Atualiza referência da câmera
+local function GetCamera()
+    Camera = Workspace.CurrentCamera
+    return Camera
+end
+
+-- Fallback: Obter dados do jogador internamente
+local function InternalGetPlayerData(player)
+    if not player then return nil end
+    
+    local character = player.Character
+    if not character or not character.Parent then return nil end
+    
+    -- Encontrar HumanoidRootPart ou alternativas
+    local anchor = character:FindFirstChild("HumanoidRootPart")
+                or character:FindFirstChild("Torso")
+                or character:FindFirstChild("UpperTorso")
+                or character:FindFirstChild("Head")
+                or character.PrimaryPart
+    
+    if not anchor or not anchor.Parent then return nil end
+    
+    -- Encontrar Humanoid
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    
+    -- Verificar se está vivo
+    if humanoid then
+        local success, health = pcall(function() return humanoid.Health end)
+        if success and health <= 0 then return nil end
+    end
+    
+    return {
+        isValid = true,
+        model = character,
+        anchor = anchor,
+        humanoid = humanoid,
+        player = player,
+    }
+end
+
+-- Wrapper: Tenta Utils primeiro, depois fallback
+local function GetPlayerData(player)
+    -- Tenta Utils se disponível
+    if Utils and Utils.GetPlayerData then
+        local data = Utils.GetPlayerData(player)
+        if data and data.isValid then return data end
+    end
+    
+    -- Fallback interno
+    return InternalGetPlayerData(player)
+end
+
+-- Fallback: Verificar se são do mesmo time
+local function InternalAreSameTeam(player1, player2)
+    if not player1 or not player2 then return false end
+    
+    -- Método 1: Team property
+    if player1.Team and player2.Team then
+        return player1.Team == player2.Team
+    end
+    
+    -- Método 2: TeamColor
+    if player1.TeamColor and player2.TeamColor then
+        return player1.TeamColor == player2.TeamColor
+    end
+    
+    -- Método 3: Neutral (sem time = não são do mesmo time)
+    if player1.Neutral or player2.Neutral then
+        return false
+    end
+    
+    return false
+end
+
+-- Wrapper: Tenta Utils primeiro, depois fallback
+local function AreSameTeam(player1, player2)
+    if Utils and Utils.AreSameTeam then
+        local success, result = pcall(function()
+            return Utils.AreSameTeam(player1, player2)
+        end)
+        if success then return result end
+    end
+    
+    return InternalAreSameTeam(player1, player2)
+end
+
+-- Fallback: Verificar posição válida (mais permissivo)
+local function IsValidPosition(pos)
+    if not pos then return false end
+    if typeof(pos) ~= "Vector3" then return false end
+    
+    -- Verificar NaN
+    if pos.X ~= pos.X or pos.Y ~= pos.Y or pos.Z ~= pos.Z then
+        return false
+    end
+    
+    -- Verificar infinito
+    if math.abs(pos.X) > 1e6 or math.abs(pos.Y) > 1e6 or math.abs(pos.Z) > 1e6 then
+        return false
+    end
+    
+    return true
+end
+
+-- Distância ao quadrado
+local function DistanceSquared(pos1, pos2)
+    local delta = pos1 - pos2
+    return delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z
+end
 
 -- ============================================================================
 -- EXECUTOR FUNCTIONS
@@ -83,120 +188,135 @@ local function SafeMouseMove(dx, dy)
 end
 
 -- ============================================================================
+-- DEBUG
+-- ============================================================================
+local function DebugPrint(...)
+    if AimbotLegit._debugMode then
+        print("[Aimbot Debug]", ...)
+    end
+end
+
+function AimbotLegit:EnableDebug(enabled)
+    self._debugMode = enabled
+    print("[Aimbot] Debug mode:", enabled and "ON" or "OFF")
+end
+
+function AimbotLegit:PrintDebugInfo()
+    local now = tick()
+    if now - self._lastDebug < 1 then return end
+    self._lastDebug = now
+    
+    print("\n========== AIMBOT DEBUG ==========")
+    print("Initialized:", self._init)
+    print("Active:", self.Active)
+    print("Settings.AimbotActive:", Settings and Settings.AimbotActive)
+    print("LocalPlayer:", LocalPlayer and LocalPlayer.Name or "nil")
+    
+    local cam = GetCamera()
+    print("Camera:", cam and "OK" or "nil")
+    
+    local playerCount = 0
+    local validTargets = 0
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            playerCount = playerCount + 1
+            local data = GetPlayerData(player)
+            if data and data.isValid then
+                validTargets = validTargets + 1
+                print("  Valid target:", player.Name)
+            end
+        end
+    end
+    
+    print("Total players:", playerCount)
+    print("Valid targets:", validTargets)
+    print("IgnoreTeam:", Settings and Settings.IgnoreTeam)
+    print("VisibleCheck:", Settings and Settings.VisibleCheck)
+    print("===================================\n")
+end
+
+-- ============================================================================
 -- TARGET LOCK
 -- ============================================================================
 local Lock = {
     Current = nil,
     Time = 0,
     Score = math.huge,
-    LastKill = 0,
     Kills = 0,
-    ValidPos = nil,
-    DeathFlag = false,
 }
 
 function Lock:Clear()
-    if self.Current then
-        if AimbotLegit._predHistory then
-            AimbotLegit._predHistory[self.Current] = nil
-        end
-        if AimbotLegit._failCount then
-            AimbotLegit._failCount[self.Current] = nil
-        end
-        if Utils then
-            Utils.VisibilityCache:Invalidate(self.Current)
-        end
-    end
-    
     self.Current = nil
     self.Time = 0
     self.Score = math.huge
-    self.ValidPos = nil
-    self.DeathFlag = false
 end
 
 function Lock:IsAlive()
-    if not self.Current or not Utils then return false end
+    if not self.Current then return false end
     
-    local data = Utils.GetPlayerData(self.Current)
+    local data = GetPlayerData(self.Current)
     if not data or not data.isValid then return false end
     if not data.anchor or not data.anchor.Parent then return false end
-    
-    if data.humanoid then
-        local success, health = pcall(function() return data.humanoid.Health end)
-        if success and health <= 0 then return false end
-    end
     
     return true
 end
 
 function Lock:Validate()
     if not self.Current then return false end
+    if not self:IsAlive() then return false end
     
-    if not self:IsAlive() then
-        if not self.DeathFlag then
-            self.DeathFlag = true
-            self.Kills = self.Kills + 1
-            self.LastKill = tick()
-        end
-        return false
-    end
+    local data = GetPlayerData(self.Current)
+    if not data then return false end
     
-    self.DeathFlag = false
+    local cam = GetCamera()
+    if not cam then return false end
     
-    local data = Utils.GetPlayerData(self.Current)
-    if not data or not data.isValid then return false end
-    
-    local Camera = Utils.GetCamera()
-    if not Camera then return false end
-    
-    local distSq = Utils.DistanceSquared(data.anchor.Position, Camera.CFrame.Position)
+    local distSq = DistanceSquared(data.anchor.Position, cam.CFrame.Position)
     local maxDist = Settings.MaxDistance or 2000
     
     if distSq > maxDist * maxDist then return false end
     
-    self.ValidPos = data.anchor.Position
     return true
 end
 
 function Lock:TryAcquire(candidate, score)
-    if not candidate or not Utils then return end
+    if not candidate then return end
     
-    local data = Utils.GetPlayerData(candidate)
+    local data = GetPlayerData(candidate)
     if not data or not data.isValid then return end
-    
-    if data.humanoid then
-        local success, health = pcall(function() return data.humanoid.Health end)
-        if success and health <= 0 then return end
-    end
     
     local now = tick()
     local maxDur = Settings.MaxLockTime or 1.5
     local threshold = Settings.LockImprovementThreshold or 0.7
     
+    -- Primeiro alvo
     if not self.Current then
         self.Current = candidate
         self.Time = now
         self.Score = score
-        self.DeathFlag = false
+        DebugPrint("Locked:", candidate.Name, "Score:", score)
         return
     end
     
+    -- Mesmo alvo
     if self.Current == candidate then
         self.Score = score
         return
     end
     
+    -- Alvo atual inválido
     if not self:Validate() then
         self.Current = candidate
         self.Time = now
         self.Score = score
-        self.DeathFlag = false
+        DebugPrint("Switched (invalid):", candidate.Name)
         return
     end
     
     local lockDur = now - self.Time
     
+    -- AutoSwitch
     if Settings.AutoSwitch and lockDur > (Settings.TargetSwitchDelay or 0.3) then
         self.Current = candidate
         self.Time = now
@@ -204,6 +324,7 @@ function Lock:TryAcquire(candidate, score)
         return
     end
     
+    -- Tempo máximo
     if lockDur > maxDur then
         self.Current = candidate
         self.Time = now
@@ -211,10 +332,12 @@ function Lock:TryAcquire(candidate, score)
         return
     end
     
+    -- Score muito melhor
     if score < self.Score * threshold then
         self.Current = candidate
         self.Time = now
         self.Score = score
+        DebugPrint("Switched (better):", candidate.Name)
     end
 end
 
@@ -225,399 +348,266 @@ function Lock:Get()
 end
 
 -- ============================================================================
--- PREDICTION
--- ============================================================================
-local PRED_HISTORY_SIZE = 6
-local PRED_INTERVAL = 1/25
-
-function AimbotLegit:UpdatePredHistory(player, pos, vel)
-    local now = tick()
-    local lastUpdate = self._lastPredUpdate[player]
-    if lastUpdate and (now - lastUpdate) < PRED_INTERVAL then return end
-    self._lastPredUpdate[player] = now
-    
-    if not self._predHistory[player] then
-        self._predHistory[player] = {positions = {}, velocities = {}}
-    end
-    
-    local hist = self._predHistory[player]
-    table.insert(hist.positions, {pos = pos, t = now})
-    if vel then table.insert(hist.velocities, {vel = vel, t = now}) end
-    
-    while #hist.positions > PRED_HISTORY_SIZE do table.remove(hist.positions, 1) end
-    while #hist.velocities > PRED_HISTORY_SIZE do table.remove(hist.velocities, 1) end
-end
-
-function AimbotLegit:ClearPredHistory(player)
-    self._predHistory[player] = nil
-    self._lastPredUpdate[player] = nil
-    self._failCount[player] = nil
-end
-
-function AimbotLegit:CalcVelocity(player, anchor)
-    if not anchor or not anchor.Parent then return Vector3.zero end
-    
-    local vel
-    local success = pcall(function()
-        vel = anchor.AssemblyLinearVelocity or anchor.Velocity
-    end)
-    
-    if success and vel and vel.Magnitude > 0.5 then return vel end
-    
-    local hist = self._predHistory[player]
-    if hist and #hist.positions >= 2 then
-        local newest = hist.positions[#hist.positions]
-        local oldest = hist.positions[1]
-        local dt = newest.t - oldest.t
-        if dt > 0.03 then
-            return (newest.pos - oldest.pos) / dt
-        end
-    end
-    
-    return Vector3.zero
-end
-
-function AimbotLegit:Predict(player, part)
-    if not part or not part.Parent then return nil end
-    
-    local basePos = part.Position
-    if not Utils.IsValidAimPosition(basePos, Settings) then return nil end
-    
-    if not Settings.UsePrediction then return basePos end
-    
-    local data = Utils.GetPlayerData(player)
-    if not data or not data.anchor or not data.anchor.Parent then return basePos end
-    
-    local vel = self:CalcVelocity(player, data.anchor)
-    
-    if vel.Y > 0 then
-        vel = Vector3.new(vel.X, vel.Y * 0.3, vel.Z)
-    end
-    
-    local Camera = Utils.GetCamera()
-    if not Camera then return basePos end
-    
-    local dist = (part.Position - Camera.CFrame.Position).Magnitude
-    local timeToTarget = math.clamp(dist / 800, 0.01, 0.3)
-    
-    local mult = Settings.PredictionMultiplier or 0.12
-    local predicted = basePos + (vel * mult * timeToTarget)
-    
-    if not Utils.IsValidAimPosition(predicted, Settings) then
-        self._failCount[player] = (self._failCount[player] or 0) + 1
-        if self._failCount[player] >= self._maxFails then
-            self._failCount[player] = 0
-            return nil
-        end
-        return basePos
-    end
-    
-    self._failCount[player] = 0
-    self:UpdatePredHistory(player, data.anchor.Position, vel)
-    return predicted
-end
-
--- ============================================================================
 -- AIM PARTS
 -- ============================================================================
+local PART_ALIASES = {
+    Head = {"Head"},
+    Torso = {"UpperTorso", "Torso", "HumanoidRootPart"},
+    Root = {"HumanoidRootPart", "Torso", "UpperTorso"},
+}
+
 function AimbotLegit:GetPart(player, partName)
-    local data = Utils.GetPlayerData(player)
-    if not data or not data.model or not data.model.Parent then return nil end
+    local data = GetPlayerData(player)
+    if not data or not data.model then return nil end
     
     partName = partName or Settings.AimPart or "Head"
-    if type(partName) == "table" then partName = partName[1] or "Head" end
-    
-    local cache = Utils.GetPartCache(player)
-    if cache then
-        local candidates = Utils.PART_MAP[partName] or {partName}
-        for i = 1, #candidates do
-            local part = cache[candidates[i]]
-            if part and part.Parent then return part end
-        end
-    end
-    
-    local candidates = Utils.PART_MAP[partName] or {partName}
     local model = data.model
     
-    for i = 1, #candidates do
-        local success, part = pcall(function()
-            return model:FindFirstChild(candidates[i], true)
-        end)
-        if success and part and part:IsA("BasePart") and part.Parent then
+    -- Tentar aliases
+    local candidates = PART_ALIASES[partName] or {partName}
+    
+    for _, name in ipairs(candidates) do
+        local part = model:FindFirstChild(name)
+        if part and part:IsA("BasePart") and part.Parent then
             return part
         end
     end
     
-    return data.anchor and data.anchor.Parent and data.anchor or nil
+    -- Fallback para anchor
+    return data.anchor
 end
 
-function AimbotLegit:GetBestPart(player)
-    local data = Utils.GetPlayerData(player)
-    if not data or not data.model or not data.model.Parent then return nil end
+-- ============================================================================
+-- VISIBILITY CHECK
+-- ============================================================================
+local RayParams = RaycastParams.new()
+RayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+function AimbotLegit:UpdateRayParams()
+    local filter = {Camera}
     
-    if not Settings.MultiPartAim then
-        return self:GetPart(player, Settings.AimPart)
+    if LocalPlayer and LocalPlayer.Character then
+        table.insert(filter, LocalPlayer.Character)
     end
     
-    local Camera = Utils.GetCamera()
-    if not Camera then return self:GetPart(player, Settings.AimPart) end
+    RayParams.FilterDescendantsInstances = filter
+end
+
+function AimbotLegit:CheckVisible(player, targetPart)
+    -- Se IgnoreWalls está ativo, sempre visível
+    if Settings.IgnoreWalls then return true end
     
-    local UIS = GetUIS()
-    if not UIS then return self:GetPart(player, Settings.AimPart) end
+    -- Se VisibleCheck está desativado, sempre visível
+    if not Settings.VisibleCheck then return true end
     
-    local mousePos = UIS:GetMouseLocation()
-    local bestPart = nil
-    local bestScore = math.huge
+    local cam = GetCamera()
+    if not cam then return false end
     
-    local partsToCheck = Settings.AimParts or {"Head", "UpperTorso", "HumanoidRootPart"}
+    local data = GetPlayerData(player)
+    if not data or not data.model then return false end
     
-    for _, partName in ipairs(partsToCheck) do
-        local part = self:GetPart(player, partName)
-        if part and part.Parent then
-            local success, screenPos, onScreen = pcall(function()
-                return Camera:WorldToViewportPoint(part.Position)
-            end)
-            
-            if success and onScreen then
-                local distToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                local score = distToMouse
-                
-                if partName == "Head" then
-                    score = score * 0.5
-                end
-                
-                if score < bestScore then
-                    if Settings.VisibleCheck and not Settings.IgnoreWalls then
-                        if self:CheckVisible(player, part) then
-                            bestScore = score
-                            bestPart = part
-                        end
-                    else
-                        bestScore = score
-                        bestPart = part
-                    end
-                end
-            end
+    self:UpdateRayParams()
+    
+    local origin = cam.CFrame.Position
+    local target = targetPart.Position
+    local direction = target - origin
+    
+    local success, result = pcall(function()
+        return Workspace:Raycast(origin, direction, RayParams)
+    end)
+    
+    if not success then return true end -- Em caso de erro, assume visível
+    
+    if result and result.Instance then
+        -- Verificar se o hit é parte do alvo
+        if result.Instance:IsDescendantOf(data.model) then
+            return true
         end
+        return false
     end
     
-    return bestPart or self:GetPart(player, Settings.AimPart)
+    return true -- Sem hit = visível
 end
 
 -- ============================================================================
 -- TARGET FINDING
 -- ============================================================================
-local CachedPlayers = {}
-local LastCacheUpdate = 0
-local CACHE_TTL = 0.35
-
-local function GetCachedPlayers()
-    local now = tick()
-    if now - LastCacheUpdate > CACHE_TTL then
-        local Players = GetPlayers()
-        if Players then CachedPlayers = Players:GetPlayers() end
-        LastCacheUpdate = now
-    end
-    return CachedPlayers
-end
-
 function AimbotLegit:FindBest()
-    local Camera = Utils.GetCamera()
-    if not Camera then return nil, math.huge end
+    local cam = GetCamera()
+    if not cam then 
+        DebugPrint("FindBest: No camera")
+        return nil, math.huge 
+    end
     
-    local camPos = Camera.CFrame.Position
-    local camLook = Camera.CFrame.LookVector
+    local camPos = cam.CFrame.Position
+    local camLook = cam.CFrame.LookVector
     
-    local UIS = GetUIS()
-    if not UIS then return nil, math.huge end
-    
-    local mousePos = UIS:GetMouseLocation()
-    local targetMode = Settings.TargetMode or "FOV"
+    local mousePos = UserInputService:GetMouseLocation()
     
     local currentFOV = Settings.AimbotFOV or Settings.FOV or 180
-    local cosThreshold = Utils.CalculateFOVCosThreshold(currentFOV)
     local currentFOVSq = currentFOV * currentFOV
-    
     local maxDist = Settings.MaxDistance or 2000
     local maxDistSq = maxDist * maxDist
     
     local candidates = {}
-    local allPlayers = GetCachedPlayers()
+    local allPlayers = Players:GetPlayers()
     
-    for i = 1, #allPlayers do
-        local player = allPlayers[i]
+    DebugPrint("Scanning", #allPlayers - 1, "players")
+    
+    for _, player in ipairs(allPlayers) do
+        -- Pular LocalPlayer
         if player == LocalPlayer then continue end
         
-        local data = Utils.GetPlayerData(player)
-        if not data or not data.isValid or not data.anchor then continue end
-        if not data.anchor.Parent then continue end
-        
-        if data.humanoid then
-            local success, health = pcall(function() return data.humanoid.Health end)
-            if success and health <= 0 then continue end
+        -- Obter dados do jogador
+        local data = GetPlayerData(player)
+        if not data or not data.isValid then 
+            DebugPrint("  Skip", player.Name, "- invalid data")
+            continue 
         end
         
+        if not data.anchor or not data.anchor.Parent then
+            DebugPrint("  Skip", player.Name, "- no anchor")
+            continue
+        end
+        
+        -- Verificar time
         local ignoreTeam = Settings.IgnoreTeam or Settings.IgnoreTeamAimbot
-        if ignoreTeam and Utils.AreSameTeam(LocalPlayer, player) then continue end
+        if ignoreTeam and AreSameTeam(LocalPlayer, player) then
+            DebugPrint("  Skip", player.Name, "- same team")
+            continue
+        end
         
-        local distSq = Utils.DistanceSquared(data.anchor.Position, camPos)
-        if distSq > maxDistSq then continue end
+        -- Verificar distância
+        local distSq = DistanceSquared(data.anchor.Position, camPos)
+        if distSq > maxDistSq then
+            DebugPrint("  Skip", player.Name, "- too far")
+            continue
+        end
         
-        local aimPart = self:GetBestPart(player)
-        if not aimPart or not aimPart.Parent then continue end
+        -- Obter parte para mirar
+        local aimPart = self:GetPart(player, Settings.AimPart)
+        if not aimPart or not aimPart.Parent then
+            DebugPrint("  Skip", player.Name, "- no aim part")
+            continue
+        end
         
+        -- Converter para tela
         local success, screenPos, onScreen = pcall(function()
-            return Camera:WorldToViewportPoint(aimPart.Position)
+            return cam:WorldToViewportPoint(aimPart.Position)
         end)
         
         if not success then continue end
         
-        if not onScreen and not Settings.AimOutsideFOV then continue end
-        
-        local dirToTarget = (aimPart.Position - camPos).Unit
-        local dot = camLook:Dot(dirToTarget)
-        
-        if dot < cosThreshold and not Settings.AimOutsideFOV then continue end
+        -- Verificar se está na tela (a menos que AimOutsideFOV)
+        if not onScreen and not Settings.AimOutsideFOV then
+            DebugPrint("  Skip", player.Name, "- off screen")
+            continue
+        end
         
         local distance = math.sqrt(distSq)
-        
-        local minHeight = Settings.MinAimHeightBelowCamera or 50
-        local heightDiff = camPos.Y - aimPart.Position.Y
-        if heightDiff > minHeight then continue end
-        
         local distToMouse = onScreen and (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude or 9999
-        local distToMouseSq = distToMouse * distToMouse
         
-        if Settings.UseAimbotFOV and distToMouseSq > currentFOVSq then continue end
-        
-        local score
-        if targetMode == "Closest" then
-            local ang = 1 - dot
-            score = distance * 0.2 + distToMouse * 0.15 + (ang * 5)
-        else
-            score = distToMouse * 1.2 + distance * 0.1
-            local angPenalty = (1 - dot) * 10
-            score = score + angPenalty
+        -- Verificar FOV
+        if Settings.UseAimbotFOV and distToMouse * distToMouse > currentFOVSq then
+            DebugPrint("  Skip", player.Name, "- outside FOV")
+            continue
         end
+        
+        -- Calcular score
+        local targetMode = Settings.TargetMode or "FOV"
+        local score
+        
+        if targetMode == "Closest" then
+            score = distance
+        else
+            score = distToMouse + distance * 0.1
+        end
+        
+        DebugPrint("  Candidate:", player.Name, "Score:", math.floor(score))
         
         candidates[#candidates + 1] = {
             player = player,
-            data = data,
             score = score,
-            distance = distance,
             aimPart = aimPart,
+            distance = distance,
         }
     end
     
-    if #candidates == 0 then return nil, math.huge end
+    if #candidates == 0 then 
+        DebugPrint("No candidates found")
+        return nil, math.huge 
+    end
     
+    -- Ordenar por score
     table.sort(candidates, function(a, b) return a.score < b.score end)
     
+    -- Verificar visibilidade
     for i = 1, math.min(5, #candidates) do
         local cand = candidates[i]
         
-        if Settings.IgnoreWalls or not Settings.VisibleCheck then
-            return cand.player, cand.score
-        end
-        
         if self:CheckVisible(cand.player, cand.aimPart) then
+            DebugPrint("Selected:", cand.player.Name)
             return cand.player, cand.score
+        else
+            DebugPrint("  Not visible:", cand.player.Name)
         end
     end
     
-    if Settings.IgnoreWalls or not Settings.VisibleCheck then
+    -- Se IgnoreWalls, retorna o melhor mesmo sem visibilidade
+    if Settings.IgnoreWalls then
         return candidates[1].player, candidates[1].score
     end
     
     return nil, math.huge
 end
 
-function AimbotLegit:CheckVisible(player, targetPart)
-    if Settings.IgnoreWalls then return true end
-    if not Settings.VisibleCheck then return true end
+-- ============================================================================
+-- PREDICTION
+-- ============================================================================
+function AimbotLegit:Predict(player, part)
+    if not part or not part.Parent then return nil end
     
-    local cached, _, hit = Utils.VisibilityCache:Get(player)
-    if hit then return cached end
+    local basePos = part.Position
+    if not IsValidPosition(basePos) then return nil end
     
-    local Camera = Utils.GetCamera()
-    local data = Utils.GetPlayerData(player)
-    if not data then return false end
+    -- Se prediction desativado
+    if not Settings.UsePrediction then return basePos end
     
-    local origin = Camera.CFrame.Position
-    local direction = targetPart.Position - origin
+    local data = GetPlayerData(player)
+    if not data or not data.anchor then return basePos end
     
-    Utils.RayParamsManager:Update(LocalPlayer, Camera)
-    
-    local success, ray = pcall(function()
-        return workspace:Raycast(origin, direction, Utils.RayParamsManager:Get())
+    -- Obter velocidade
+    local vel = Vector3.zero
+    pcall(function()
+        vel = data.anchor.AssemblyLinearVelocity or data.anchor.Velocity or Vector3.zero
     end)
     
-    local visible = true
-    if success and ray and ray.Instance then
-        if not ray.Instance:IsDescendantOf(data.model) then
-            visible = false
-        end
+    if vel.Magnitude < 0.5 then return basePos end
+    
+    -- Reduzir componente vertical
+    if vel.Y > 0 then
+        vel = Vector3.new(vel.X, vel.Y * 0.3, vel.Z)
     end
     
-    Utils.VisibilityCache:Set(player, visible, targetPart)
-    return visible
+    local cam = GetCamera()
+    if not cam then return basePos end
+    
+    local dist = (part.Position - cam.CFrame.Position).Magnitude
+    local timeToTarget = math.clamp(dist / 800, 0.01, 0.3)
+    
+    local mult = Settings.PredictionMultiplier or 0.12
+    local predicted = basePos + (vel * mult * timeToTarget)
+    
+    if not IsValidPosition(predicted) then
+        return basePos
+    end
+    
+    return predicted
 end
 
 -- ============================================================================
--- AIM CONTROLLER
+-- AIM APPLICATION
 -- ============================================================================
-function AimbotLegit:DetectMethods()
-    InitExecutorFuncs()
-    self._hasMMR = ExecutorFuncs.isAvailable
-end
-
-function AimbotLegit:StartAiming()
-    if self._active then return end
-    self._active = true
-    self._controlled = true
-    
-    local Camera = Utils.GetCamera()
-    if not Camera then return end
-    
-    self._prevType = Camera.CameraType
-    self._prevSubject = Camera.CameraSubject
-    self._prevCF = Camera.CFrame
-    self._origCF = Camera.CFrame
-end
-
-function AimbotLegit:StopAiming()
-    if not self._active then return end
-    self._active = false
-    
-    if self._lerpConn then
-        pcall(function() self._lerpConn:Disconnect() end)
-        self._lerpConn = nil
-    end
-    
-    self._origCF = nil
-    self._lastPos = nil
-    self._validPos = nil
-    self._history = {}
-    self._controlled = false
-    
-    Utils.SafeCall(function()
-        local Camera = Utils.GetCamera()
-        if Camera and LocalPlayer and LocalPlayer.Character then
-            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-            if hum then Camera.CameraSubject = hum end
-            
-            if self._prevType then
-                Camera.CameraType = self._prevType
-            end
-        end
-    end, "StopAiming")
-end
-
-function AimbotLegit:HoldAndStop(seconds)
-    seconds = seconds or 0.2
-    self._holdUntil = tick() + seconds
-end
-
 function AimbotLegit:CalcSmooth(smoothing)
     smoothing = smoothing or Settings.SmoothingFactor or 5
     
@@ -627,66 +617,30 @@ function AimbotLegit:CalcSmooth(smoothing)
     if smoothing <= 5 then return 0.3 end
     if smoothing <= 8 then return 0.18 end
     if smoothing <= 12 then return 0.1 end
-    return Utils.Clamp(0.6 / smoothing, 0.02, 0.08)
-end
-
-function AimbotLegit:ApplyShakeReduction(targetPos)
-    local shakeReduction = Settings.ShakeReduction or 0
-    if shakeReduction <= 0 then return targetPos end
-    
-    table.insert(self._history, targetPos)
-    while #self._history > shakeReduction + 2 do
-        table.remove(self._history, 1)
-    end
-    
-    if #self._history < 2 then return targetPos end
-    
-    local avgPos = Vector3.zero
-    local totalWeight = 0
-    
-    for i, pos in ipairs(self._history) do
-        local weight = i * i
-        avgPos = avgPos + pos * weight
-        totalWeight = totalWeight + weight
-    end
-    
-    return avgPos / totalWeight
+    return math.clamp(0.6 / smoothing, 0.02, 0.08)
 end
 
 function AimbotLegit:ApplyAim(targetPos, smoothing)
     if not targetPos then return false end
+    if not IsValidPosition(targetPos) then return false end
     
-    if not Utils.IsValidAimPosition(targetPos, Settings) then
-        if self._validPos and Utils.IsValidAimPosition(self._validPos, Settings) then
-            targetPos = self._validPos
-        else
-            return false
-        end
-    end
-    
-    self._validPos = targetPos
-    
-    local Camera = Utils.GetCamera()
-    if not Camera then return false end
-    
-    targetPos = self:ApplyShakeReduction(targetPos)
+    local cam = GetCamera()
+    if not cam then return false end
     
     local method = Settings.AimMethod or "Camera"
     local smoothFactor = self:CalcSmooth(smoothing)
     
+    -- Deadzone check
     if Settings.UseDeadzone then
         local success, screenPos, onScreen = pcall(function()
-            return Camera:WorldToViewportPoint(targetPos)
+            return cam:WorldToViewportPoint(targetPos)
         end)
         
         if success and onScreen then
-            local UIS = GetUIS()
-            if UIS then
-                local mousePos = UIS:GetMouseLocation()
-                local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                local deadzone = Settings.DeadzoneRadius or 2
-                if dist < deadzone then return true end
-            end
+            local mousePos = UserInputService:GetMouseLocation()
+            local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+            local deadzone = Settings.DeadzoneRadius or 2
+            if dist < deadzone then return true end
         end
     end
     
@@ -699,20 +653,20 @@ end
 
 function AimbotLegit:Method_Cam(targetPos, smoothFactor)
     local success = pcall(function()
-        self:StartAiming()
+        self._active = true
         
-        local Camera = Utils.GetCamera()
-        local camPos = Camera.CFrame.Position
+        local cam = GetCamera()
+        local camPos = cam.CFrame.Position
         local dir = targetPos - camPos
         
         if dir.Magnitude < 0.001 then return end
         
         local targetCF = CFrame.lookAt(camPos, targetPos)
         
-        local currentRot = Camera.CFrame.Rotation
+        local currentRot = cam.CFrame.Rotation
         local targetRot = targetCF.Rotation
         local smoothedRot = currentRot:Lerp(targetRot, smoothFactor)
-        Camera.CFrame = CFrame.new(camPos) * smoothedRot
+        cam.CFrame = CFrame.new(camPos) * smoothedRot
     end)
     
     return success
@@ -726,15 +680,15 @@ function AimbotLegit:Method_MMR(targetPos, smoothFactor)
     local success = pcall(function()
         self._active = true
         
-        local Camera = Utils.GetCamera()
+        local cam = GetCamera()
         
-        local success2, screenPos, onScreen = pcall(function()
-            return Camera:WorldToViewportPoint(targetPos)
+        local s, screenPos, onScreen = pcall(function()
+            return cam:WorldToViewportPoint(targetPos)
         end)
         
-        if not success2 or not onScreen then return end
+        if not s or not onScreen then return end
         
-        local viewport = Camera.ViewportSize
+        local viewport = cam.ViewportSize
         local centerX = viewport.X / 2
         local centerY = viewport.Y / 2
         
@@ -756,96 +710,80 @@ end
 -- MAIN UPDATE
 -- ============================================================================
 function AimbotLegit:Update(mouseHold)
-    if not self._init then return end
+    if not self._init then 
+        DebugPrint("Not initialized!")
+        return 
+    end
     
-    pcall(function() Utils.VisibilityCache:NextFrame() end)
+    -- Debug periódico
+    if self._debugMode then
+        self:PrintDebugInfo()
+    end
     
     local holdActive = self._holdUntil and tick() < self._holdUntil
-    
-    -- USA SETTINGS.AIMBOTACTIVE DIRETAMENTE
     local shouldBeActive = (Settings.AimbotActive and mouseHold) or holdActive
     
     if not shouldBeActive then
         if self.Active then
             self.Active = false
             Lock:Clear()
-            if not holdActive then self:StopAiming() end
+            self._active = false
         end
         
         if self._holdUntil and tick() >= self._holdUntil then
             self._holdUntil = nil
-            self:StopAiming()
         end
         return
     end
     
     self.Active = true
     
+    -- Encontrar melhor alvo
     local bestTarget, bestScore = self:FindBest()
-    if bestTarget then Lock:TryAcquire(bestTarget, bestScore) end
+    
+    if bestTarget then
+        Lock:TryAcquire(bestTarget, bestScore)
+    end
     
     local target = Lock:Get()
     
     if target then
-        local data = Utils.GetPlayerData(target)
+        local data = GetPlayerData(target)
         if not data or not data.isValid then
-            if Settings.AutoResetOnKill then
-                self:HoldAndStop(0.2)
-            else
-                self:StopAiming()
-            end
             Lock:Clear()
             return
         end
         
-        if data.humanoid then
-            local success, health = pcall(function() return data.humanoid.Health end)
-            if success and health <= 0 then
-                if Settings.AutoResetOnKill then
-                    self:HoldAndStop(0.2)
-                else
-                    self:StopAiming()
-                end
-                Lock:Clear()
-                return
-            end
-        end
-        
-        local aimPart = self:GetBestPart(target)
+        local aimPart = self:GetPart(target, Settings.AimPart)
         
         if aimPart and aimPart.Parent then
             local aimPos = self:Predict(target, aimPart)
             
-            if not aimPos or not Utils.IsValidAimPosition(aimPos, Settings) then
+            if not aimPos then
                 aimPos = aimPart.Position
-                if not Utils.IsValidAimPosition(aimPos, Settings) then
-                    Lock:Clear()
-                    self:StopAiming()
-                    return
-                end
             end
             
-            local smoothing = Settings.SmoothingFactor or 5
-            
-            if Settings.UseAdaptiveSmoothing then
-                local Camera = Utils.GetCamera()
-                if Camera then
-                    local distSq = Utils.DistanceSquared(data.anchor.Position, Camera.CFrame.Position)
-                    if distSq < 2500 then
-                        smoothing = smoothing * 1.5
-                    elseif distSq > 90000 then
-                        smoothing = smoothing * 0.6
+            if IsValidPosition(aimPos) then
+                local smoothing = Settings.SmoothingFactor or 5
+                
+                -- Adaptive smoothing
+                if Settings.UseAdaptiveSmoothing then
+                    local cam = GetCamera()
+                    if cam then
+                        local distSq = DistanceSquared(data.anchor.Position, cam.CFrame.Position)
+                        if distSq < 2500 then
+                            smoothing = smoothing * 1.5
+                        elseif distSq > 90000 then
+                            smoothing = smoothing * 0.6
+                        end
                     end
                 end
+                
+                self:ApplyAim(aimPos, smoothing)
             end
-            
-            self:ApplyAim(aimPos, smoothing)
         else
             Lock:Clear()
-            self:StopAiming()
         end
-    else
-        self:StopAiming()
     end
 end
 
@@ -858,7 +796,7 @@ function AimbotLegit:Toggle(enabled)
         self.Active = false
         self._holdUntil = nil
         Lock:Clear()
-        self:StopAiming()
+        self._active = false
     end
 end
 
@@ -866,58 +804,61 @@ function AimbotLegit:GetCurrentTarget()
     return Lock:Get()
 end
 
-function AimbotLegit:GetTargetPosition()
-    local target = Lock:Get()
-    if not target then return nil end
-    
-    local aimPart = self:GetBestPart(target)
-    if not aimPart then return nil end
-    
-    return self:Predict(target, aimPart)
-end
-
 function AimbotLegit:ForceReset()
     self.Active = false
+    self._active = false
     self._holdUntil = nil
     Lock:Clear()
-    self:StopAiming()
     self._predHistory = {}
-    self._lastPredUpdate = {}
     self._failCount = {}
     self._validPos = nil
-    
-    pcall(function() Utils.VisibilityCache:Clear() end)
+end
+
+function AimbotLegit:HoldAndStop(seconds)
+    seconds = seconds or 0.2
+    self._holdUntil = tick() + seconds
 end
 
 -- ============================================================================
 -- INITIALIZATION
 -- ============================================================================
 function AimbotLegit:Initialize(deps)
-    if self._init then return self end
+    if self._init then 
+        print("[AimbotLegit] Already initialized")
+        return self 
+    end
+    
+    print("[AimbotLegit] Initializing...")
     
     if not deps then
-        warn("[AimbotLegit] Missing dependencies")
+        warn("[AimbotLegit] No dependencies provided!")
         return nil
     end
     
+    -- Armazenar dependências
     Utils = deps.Utils
-    Settings = deps.Settings  -- USA O SETTINGS DO MAIN!
-    LocalPlayer = deps.LocalPlayer
+    Settings = deps.Settings
+    LocalPlayer = deps.LocalPlayer or Players.LocalPlayer
     
-    if not Utils then
-        warn("[AimbotLegit] Utils not available")
-        return nil
-    end
-    
+    -- Verificar Settings
     if not Settings then
-        warn("[AimbotLegit] Settings not available")
+        warn("[AimbotLegit] Settings not provided!")
         return nil
     end
     
-    self:DetectMethods()
+    -- Obter câmera
+    GetCamera()
+    
+    -- Detectar MouseMoveRel
+    InitExecutorFuncs()
+    self._hasMMR = ExecutorFuncs.isAvailable
     
     self._init = true
-    print("[AimbotLegit] Initialized with global Settings")
+    
+    print("[AimbotLegit] ✓ Initialized successfully")
+    print("[AimbotLegit] MouseMoveRel:", self._hasMMR and "Available" or "Not available")
+    print("[AimbotLegit] Utils:", Utils and "Loaded" or "Using fallbacks")
+    
     return self
 end
 
