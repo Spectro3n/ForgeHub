@@ -1,6 +1,6 @@
 -- ============================================================================
--- FORGEHUB - RAGE MODULE v4.6
--- Modos: RageMode, UltraRageMode, GodRageMode - Adaptado ao Settings
+-- FORGEHUB - RAGE MODULE v4.7 (FIXED)
+-- Usa Settings global passado pelo main
 -- ============================================================================
 
 local RageModule = {
@@ -10,7 +10,6 @@ local RageModule = {
     _snapCD = 0.06,
     _snapDur = 0.04,
     
-    -- Cache
     _predHistory = {},
     _lastPredUpdate = {},
     _failCount = {},
@@ -32,12 +31,10 @@ local function GetPlayers() return GetService("Players") end
 local function GetUIS() return GetService("UserInputService") end
 
 -- ============================================================================
--- DEPENDENCIES
+-- DEPENDENCIES (PASSADAS PELO MAIN)
 -- ============================================================================
 local Utils = nil
-local Settings = nil
-local EventBus = nil
-local Hooks = nil
+local Settings = nil  -- SETTINGS GLOBAL DO MAIN
 local LocalPlayer = nil
 local BaseAimbot = nil
 
@@ -66,18 +63,19 @@ local function SafeMouseMove(dx, dy)
 end
 
 -- ============================================================================
--- HELPER - GET RAGE LEVEL
+-- HELPER - GET RAGE LEVEL (USA SETTINGS GLOBAL)
 -- ============================================================================
 local function GetRageLevel()
-    if Settings.GodRageMode or Settings.MaxMode then return 3 end
-    if Settings.UltraRageMode or Settings.UltraMode then return 2 end
-    if Settings.RageMode or Settings.EnhancedMode then return 1 end
+    if not Settings then return 0 end
+    if Settings.GodRageMode then return 3 end
+    if Settings.UltraRageMode then return 2 end
+    if Settings.RageMode then return 1 end
     return 0
 end
 
 local function IsRageActive()
-    return Settings.RageMode or Settings.UltraRageMode or Settings.GodRageMode or
-           Settings.EnhancedMode or Settings.UltraMode or Settings.MaxMode
+    if not Settings then return false end
+    return Settings.RageMode or Settings.UltraRageMode or Settings.GodRageMode
 end
 
 -- ============================================================================
@@ -94,7 +92,6 @@ function RageLock:Clear()
     self.Current = nil
     self.Time = 0
     self.Score = math.huge
-    if EventBus then pcall(function() EventBus:Emit("rage:target_lost") end) end
 end
 
 function RageLock:IsAlive()
@@ -114,7 +111,6 @@ function RageLock:Validate()
     if not self.Current then return false end
     if not self:IsAlive() then
         self.Kills = self.Kills + 1
-        if EventBus then pcall(function() EventBus:Emit("rage:kill", self.Current) end) end
         return false
     end
     return true
@@ -126,7 +122,6 @@ function RageLock:TryAcquire(candidate, score)
     local now = tick()
     local rageLevel = GetRageLevel()
     
-    -- God Rage (Level 3): troca instantânea
     if rageLevel >= 3 then
         self.Current = candidate
         self.Time = now
@@ -134,7 +129,6 @@ function RageLock:TryAcquire(candidate, score)
         return
     end
     
-    -- Ultra Rage (Level 2): troca muito rápida
     if rageLevel >= 2 then
         if not self.Current or not self:Validate() or (now - self.Time) > 0.08 then
             self.Current = candidate
@@ -148,7 +142,6 @@ function RageLock:TryAcquire(candidate, score)
         return
     end
     
-    -- Rage Mode (Level 1): troca rápida
     if not self.Current or not self:Validate() or (now - self.Time) > 0.15 then
         self.Current = candidate
         self.Time = now
@@ -203,7 +196,6 @@ function RageModule:Predict(player, part)
     local data = Utils.GetPlayerData(player)
     if not data or not data.anchor then return basePos end
     
-    -- Se prediction desativado, retorna posição base
     if not Settings.UsePrediction then return basePos end
     
     local vel = self:CalcVelocity(player, data.anchor)
@@ -215,7 +207,6 @@ function RageModule:Predict(player, part)
         accel = self:CalcAccel(player)
     end
     
-    -- Rage: menos redução vertical
     local yMult = rageLevel >= 3 and 0.8 or (rageLevel >= 2 and 0.7 or 0.55)
     if vel.Y > 0 then
         vel = Vector3.new(vel.X, vel.Y * yMult, vel.Z)
@@ -226,7 +217,6 @@ function RageModule:Predict(player, part)
     
     local dist = (part.Position - Camera.CFrame.Position).Magnitude
     
-    -- Rage: predição mais agressiva
     local timeDiv = rageLevel >= 3 and 280 or (rageLevel >= 2 and 320 or 400)
     local timeToTarget = math.clamp(dist / timeDiv, 0.01, 0.5)
     
@@ -245,7 +235,6 @@ function RageModule:Predict(player, part)
         predicted = predicted + (accel * 0.6 * timeToTarget * timeToTarget)
     end
     
-    -- Salva histórico
     if not self._predHistory[player] then
         self._predHistory[player] = {}
     end
@@ -266,15 +255,13 @@ function RageModule:GetBestPart(player)
     if not data or not data.model or not data.model.Parent then return nil end
     
     local rageLevel = GetRageLevel()
-    local headOnly = Settings.RageHeadOnly or Settings.HeadOnly
+    local headOnly = Settings.RageHeadOnly
     
-    -- Rage: sempre Head primeiro
     if headOnly or rageLevel >= 2 then
         local head = data.model:FindFirstChild("Head")
         if head and head.Parent then return head end
     end
     
-    -- Fallback
     if BaseAimbot and BaseAimbot.GetPart then
         return BaseAimbot:GetPart(player, Settings.AimPart)
     end
@@ -309,7 +296,6 @@ function RageModule:FindBest()
     
     local rageLevel = GetRageLevel()
     
-    -- Rage: FOV e distância muito maiores
     local baseFOV = Settings.AimbotFOV or Settings.FOV or 180
     local maxFOV = rageLevel >= 3 and 99999 or 
                    (rageLevel >= 2 and baseFOV * 5 or baseFOV * 3)
@@ -331,13 +317,11 @@ function RageModule:FindBest()
         if not data or not data.isValid or not data.anchor then continue end
         if not data.anchor.Parent then continue end
         
-        -- Check HP
         if data.humanoid then
             local s, h = pcall(function() return data.humanoid.Health end)
             if s and h <= 0 then continue end
         end
         
-        -- Team check
         local ignoreTeam = Settings.IgnoreTeam or Settings.IgnoreTeamAimbot
         if ignoreTeam and Utils.AreSameTeam(LocalPlayer, player) then continue end
         
@@ -353,7 +337,6 @@ function RageModule:FindBest()
         
         if not success then continue end
         
-        -- Rage: ignora onScreen em alguns casos
         local allowOutside = rageLevel >= 3 or Settings.AimOutsideFOV
         if not onScreen and not allowOutside then continue end
         
@@ -362,7 +345,6 @@ function RageModule:FindBest()
         
         if rageLevel < 3 and distToMouse > maxFOV then continue end
         
-        -- Score: prioriza health baixa
         local healthMult = 1
         if data.humanoid then
             local s, hp = pcall(function() return data.humanoid.Health / data.humanoid.MaxHealth end)
@@ -392,18 +374,15 @@ function RageModule:FindBest()
     
     table.sort(candidates, function(a, b) return a.score < b.score end)
     
-    -- Rage: menos verificações de visibilidade
     local maxChecks = rageLevel >= 3 and 1 or (rageLevel >= 2 and 1 or 2)
     
     for i = 1, math.min(maxChecks, #candidates) do
         local cand = candidates[i]
         
-        -- God/Ultra/IgnoreWalls: sem check de visibilidade
-        if rageLevel >= 3 or Settings.IgnoreWalls or Settings.MagicBullet then
+        if rageLevel >= 3 or Settings.IgnoreWalls then
             return cand.player, cand.score
         end
         
-        -- Check rápido de visibilidade
         if BaseAimbot and BaseAimbot.CheckVisible then
             if BaseAimbot:CheckVisible(cand.player, cand.aimPart) then
                 return cand.player, cand.score
@@ -413,7 +392,6 @@ function RageModule:FindBest()
         end
     end
     
-    -- Fallback
     if rageLevel >= 3 or Settings.IgnoreWalls then
         return candidates[1].player, candidates[1].score
     end
@@ -449,10 +427,8 @@ function RageModule:Method_Cam_Rage(targetPos)
         local rageLevel = GetRageLevel()
         
         if rageLevel >= 3 then
-            -- God: Snap instantâneo
             Camera.CFrame = targetCF
         elseif rageLevel >= 2 then
-            -- Ultra: Snap com cooldown mínimo
             if (now - self._lastSnap) >= 0.02 then
                 Camera.CFrame = targetCF
                 self._lastSnap = now
@@ -460,7 +436,6 @@ function RageModule:Method_Cam_Rage(targetPos)
                 Camera.CFrame = Camera.CFrame:Lerp(targetCF, 0.98)
             end
         else
-            -- Rage normal: lerp muito rápido
             if (now - self._lastSnap) >= self._snapCD then
                 Camera.CFrame = Camera.CFrame:Lerp(targetCF, 0.95)
                 self._lastSnap = now
@@ -507,9 +482,9 @@ end
 function RageModule:Update(mouseHold)
     if not self._init then return false end
     
-    -- Verificar se algum modo rage está ativo
+    -- Verificar se algum modo rage está ativo (USA SETTINGS GLOBAL)
     if not IsRageActive() then
-        return false -- Indica que rage não processou
+        return false
     end
     
     if not Settings.AimbotActive or not mouseHold then
@@ -537,17 +512,13 @@ function RageModule:Update(mouseHold)
             
             if aimPos then
                 self:ApplyAim(aimPos)
-                
-                if EventBus then
-                    pcall(function() EventBus:Emit("rage:aim", target, aimPos) end)
-                end
             end
         else
             RageLock:Clear()
         end
     end
     
-    return true -- Indica que rage processou
+    return true
 end
 
 -- ============================================================================
@@ -567,12 +538,9 @@ end
 
 function RageModule:SetRageMode(enabled)
     Settings.RageMode = enabled
-    Settings.EnhancedMode = enabled
     if not enabled then
         Settings.UltraRageMode = false
         Settings.GodRageMode = false
-        Settings.UltraMode = false
-        Settings.MaxMode = false
         RageLock:Clear()
         self._active = false
     end
@@ -580,26 +548,20 @@ end
 
 function RageModule:SetUltraRageMode(enabled)
     Settings.UltraRageMode = enabled
-    Settings.UltraMode = enabled
     if enabled then
         Settings.RageMode = true
-        Settings.EnhancedMode = true
     end
     if not enabled then
         Settings.GodRageMode = false
-        Settings.MaxMode = false
         RageLock:Clear()
     end
 end
 
 function RageModule:SetGodRageMode(enabled)
     Settings.GodRageMode = enabled
-    Settings.MaxMode = enabled
     if enabled then
         Settings.RageMode = true
         Settings.UltraRageMode = true
-        Settings.EnhancedMode = true
-        Settings.UltraMode = true
     end
     if not enabled then
         RageLock:Clear()
@@ -625,9 +587,7 @@ function RageModule:Initialize(deps)
     end
     
     Utils = deps.Utils
-    Settings = deps.Settings
-    EventBus = deps.EventBus
-    Hooks = deps.Hooks
+    Settings = deps.Settings  -- USA O SETTINGS DO MAIN!
     LocalPlayer = deps.LocalPlayer
     BaseAimbot = deps.Aimbot
     
@@ -636,9 +596,15 @@ function RageModule:Initialize(deps)
         return nil
     end
     
+    if not Settings then
+        warn("[RageModule] Settings not available")
+        return nil
+    end
+    
     InitExecutorFuncs()
     
     self._init = true
+    print("[RageModule] Initialized with global Settings")
     return self
 end
 

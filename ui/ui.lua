@@ -220,6 +220,14 @@ local function SetupInputHandling()
         
         if isInputMatch and isInputMatch(input, Settings.AimbotToggleKey) then 
             Settings.AimbotActive = not Settings.AimbotActive
+            
+            -- ATUALIZA O TOGGLE NA UI
+            if UI.AimbotToggle and UI.AimbotToggle.Set then
+                pcall(function()
+                    UI.AimbotToggle:Set(Settings.AimbotActive)
+                end)
+            end
+            
             if Notify then
                 local status = Settings.AimbotActive and "ATIVADO ✅" or "DESATIVADO ❌"
                 if Settings.GodRageMode then
@@ -233,7 +241,7 @@ local function SetupInputHandling()
             end
         end
     end)
-
+    
     UserInputService.InputEnded:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         

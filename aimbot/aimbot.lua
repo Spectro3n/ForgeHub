@@ -1,6 +1,6 @@
 -- ============================================================================
--- FORGEHUB - AIMBOT LEGIT MODULE v4.6
--- Apenas funcionalidades legit/normais - Adaptado ao Settings
+-- FORGEHUB - AIMBOT LEGIT MODULE v4.7 (FIXED)
+-- Usa Settings global passado pelo main
 -- ============================================================================
 
 local AimbotLegit = {
@@ -14,7 +14,6 @@ local AimbotLegit = {
     _smoothHist = {},
     _maxHist = 5,
     
-    -- Controle
     _holdUntil = nil,
     _controlled = false,
     _prevType = nil,
@@ -22,17 +21,15 @@ local AimbotLegit = {
     _prevCF = nil,
     _lerpConn = nil,
     
-    -- Fallback
     _failCount = {},
     _maxFails = 3,
     
-    -- Prediction
     _predHistory = {},
     _lastPredUpdate = {},
 }
 
 -- ============================================================================
--- SERVIÇOS COM LAZY LOADING
+-- SERVICES
 -- ============================================================================
 local ServiceCache = {}
 
@@ -48,12 +45,10 @@ local function GetPlayers() return GetService("Players") end
 local function GetUIS() return GetService("UserInputService") end
 
 -- ============================================================================
--- DEPENDENCIES
+-- DEPENDENCIES (PASSADAS PELO MAIN)
 -- ============================================================================
 local Utils = nil
-local Settings = nil
-local EventBus = nil
-local Hooks = nil
+local Settings = nil  -- SETTINGS GLOBAL DO MAIN
 local LocalPlayer = nil
 
 -- ============================================================================
@@ -88,23 +83,7 @@ local function SafeMouseMove(dx, dy)
 end
 
 -- ============================================================================
--- HELPER - SYNC SETTINGS
--- ============================================================================
-local function SyncSettings()
-    if not Settings then return end
-    
-    -- Sincroniza aliases se existirem
-    if Settings.IgnoreTeamAimbot ~= nil then
-        Settings.IgnoreTeam = Settings.IgnoreTeamAimbot
-    end
-    
-    if Settings.AimbotFOV then
-        Settings.FOV = Settings.AimbotFOV
-    end
-end
-
--- ============================================================================
--- TARGET LOCK (LEGIT)
+-- TARGET LOCK
 -- ============================================================================
 local Lock = {
     Current = nil,
@@ -112,9 +91,6 @@ local Lock = {
     Score = math.huge,
     LastKill = 0,
     Kills = 0,
-    MinDur = 0.1,
-    MaxDur = 1.5,
-    Threshold = 0.7,
     ValidPos = nil,
     DeathFlag = false,
 }
@@ -137,10 +113,6 @@ function Lock:Clear()
     self.Score = math.huge
     self.ValidPos = nil
     self.DeathFlag = false
-    
-    if EventBus then
-        pcall(function() EventBus:Emit("target:lost", self.Current) end)
-    end
 end
 
 function Lock:IsAlive()
@@ -166,9 +138,6 @@ function Lock:Validate()
             self.DeathFlag = true
             self.Kills = self.Kills + 1
             self.LastKill = tick()
-            if EventBus then 
-                pcall(function() EventBus:Emit("target:killed", self.Current) end) 
-            end
         end
         return false
     end
@@ -202,30 +171,22 @@ function Lock:TryAcquire(candidate, score)
     end
     
     local now = tick()
+    local maxDur = Settings.MaxLockTime or 1.5
+    local threshold = Settings.LockImprovementThreshold or 0.7
     
-    -- Configura thresholds baseado em settings
-    self.MaxDur = Settings.MaxLockTime or 1.5
-    self.Threshold = Settings.LockImprovementThreshold or 0.7
-    
-    -- Primeiro alvo
     if not self.Current then
         self.Current = candidate
         self.Time = now
         self.Score = score
         self.DeathFlag = false
-        if EventBus then 
-            pcall(function() EventBus:Emit("target:locked", candidate, score) end) 
-        end
         return
     end
     
-    -- Mesmo alvo
     if self.Current == candidate then
         self.Score = score
         return
     end
     
-    -- Alvo atual inválido
     if not self:Validate() then
         self.Current = candidate
         self.Time = now
@@ -236,24 +197,21 @@ function Lock:TryAcquire(candidate, score)
     
     local lockDur = now - self.Time
     
-    -- AutoSwitch
-    if Settings.AutoSwitch and lockDur > (Settings.SwitchDelay or Settings.TargetSwitchDelay or 0.3) then
+    if Settings.AutoSwitch and lockDur > (Settings.TargetSwitchDelay or 0.3) then
         self.Current = candidate
         self.Time = now
         self.Score = score
         return
     end
     
-    -- Tempo máximo
-    if lockDur > self.MaxDur then
+    if lockDur > maxDur then
         self.Current = candidate
         self.Time = now
         self.Score = score
         return
     end
     
-    -- Score muito melhor
-    if score < self.Score * self.Threshold then
+    if score < self.Score * threshold then
         self.Current = candidate
         self.Time = now
         self.Score = score
@@ -267,7 +225,7 @@ function Lock:Get()
 end
 
 -- ============================================================================
--- PREDICTION (LEGIT)
+-- PREDICTION
 -- ============================================================================
 local PRED_HISTORY_SIZE = 6
 local PRED_INTERVAL = 1/25
@@ -325,7 +283,6 @@ function AimbotLegit:Predict(player, part)
     local basePos = part.Position
     if not Utils.IsValidAimPosition(basePos, Settings) then return nil end
     
-    -- Verificar se prediction está ativado
     if not Settings.UsePrediction then return basePos end
     
     local data = Utils.GetPlayerData(player)
@@ -333,7 +290,6 @@ function AimbotLegit:Predict(player, part)
     
     local vel = self:CalcVelocity(player, data.anchor)
     
-    -- Legit: reduz bastante a vertical
     if vel.Y > 0 then
         vel = Vector3.new(vel.X, vel.Y * 0.3, vel.Z)
     end
@@ -344,7 +300,6 @@ function AimbotLegit:Predict(player, part)
     local dist = (part.Position - Camera.CFrame.Position).Magnitude
     local timeToTarget = math.clamp(dist / 800, 0.01, 0.3)
     
-    -- Usa o multiplicador do settings
     local mult = Settings.PredictionMultiplier or 0.12
     local predicted = basePos + (vel * mult * timeToTarget)
     
@@ -400,12 +355,10 @@ function AimbotLegit:GetBestPart(player)
     local data = Utils.GetPlayerData(player)
     if not data or not data.model or not data.model.Parent then return nil end
     
-    -- Legit: usa parte configurada nos settings
     if not Settings.MultiPartAim then
         return self:GetPart(player, Settings.AimPart)
     end
     
-    -- Multi-part: encontra melhor parte visível
     local Camera = Utils.GetCamera()
     if not Camera then return self:GetPart(player, Settings.AimPart) end
     
@@ -413,8 +366,6 @@ function AimbotLegit:GetBestPart(player)
     if not UIS then return self:GetPart(player, Settings.AimPart) end
     
     local mousePos = UIS:GetMouseLocation()
-    local camPos = Camera.CFrame.Position
-    
     local bestPart = nil
     local bestScore = math.huge
     
@@ -431,13 +382,11 @@ function AimbotLegit:GetBestPart(player)
                 local distToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
                 local score = distToMouse
                 
-                -- Prioridade para Head
                 if partName == "Head" then
                     score = score * 0.5
                 end
                 
                 if score < bestScore then
-                    -- Check visibilidade se necessário
                     if Settings.VisibleCheck and not Settings.IgnoreWalls then
                         if self:CheckVisible(player, part) then
                             bestScore = score
@@ -456,7 +405,7 @@ function AimbotLegit:GetBestPart(player)
 end
 
 -- ============================================================================
--- TARGET FINDING (LEGIT)
+-- TARGET FINDING
 -- ============================================================================
 local CachedPlayers = {}
 local LastCacheUpdate = 0
@@ -472,21 +421,7 @@ local function GetCachedPlayers()
     return CachedPlayers
 end
 
-function AimbotLegit:GetLocalVelocity()
-    if not LocalPlayer or not LocalPlayer.Character then return Vector3.zero end
-    
-    local success, vel = pcall(function()
-        local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if not hrp then return Vector3.zero end
-        return hrp.AssemblyLinearVelocity or hrp.Velocity or Vector3.zero
-    end)
-    
-    return success and vel or Vector3.zero
-end
-
 function AimbotLegit:FindBest()
-    SyncSettings()
-    
     local Camera = Utils.GetCamera()
     if not Camera then return nil, math.huge end
     
@@ -522,7 +457,6 @@ function AimbotLegit:FindBest()
             if success and health <= 0 then continue end
         end
         
-        -- Verificar time
         local ignoreTeam = Settings.IgnoreTeam or Settings.IgnoreTeamAimbot
         if ignoreTeam and Utils.AreSameTeam(LocalPlayer, player) then continue end
         
@@ -538,7 +472,6 @@ function AimbotLegit:FindBest()
         
         if not success then continue end
         
-        -- Legit: requer onScreen (exceto se AimOutsideFOV)
         if not onScreen and not Settings.AimOutsideFOV then continue end
         
         local dirToTarget = (aimPart.Position - camPos).Unit
@@ -548,7 +481,6 @@ function AimbotLegit:FindBest()
         
         local distance = math.sqrt(distSq)
         
-        -- Verificar altura mínima
         local minHeight = Settings.MinAimHeightBelowCamera or 50
         local heightDiff = camPos.Y - aimPart.Position.Y
         if heightDiff > minHeight then continue end
@@ -581,7 +513,6 @@ function AimbotLegit:FindBest()
     
     table.sort(candidates, function(a, b) return a.score < b.score end)
     
-    -- Legit: verificar visibilidade
     for i = 1, math.min(5, #candidates) do
         local cand = candidates[i]
         
@@ -633,19 +564,11 @@ function AimbotLegit:CheckVisible(player, targetPart)
 end
 
 -- ============================================================================
--- AIM CONTROLLER (LEGIT)
+-- AIM CONTROLLER
 -- ============================================================================
 function AimbotLegit:DetectMethods()
     InitExecutorFuncs()
-    
-    local caps = nil
-    if Hooks then pcall(function() caps = Hooks:GetCapabilities() end) end
-    
-    if caps then
-        self._hasMMR = caps.HasMouseMoveRel or ExecutorFuncs.isAvailable
-    else
-        self._hasMMR = ExecutorFuncs.isAvailable
-    end
+    self._hasMMR = ExecutorFuncs.isAvailable
 end
 
 function AimbotLegit:StartAiming()
@@ -660,8 +583,6 @@ function AimbotLegit:StartAiming()
     self._prevSubject = Camera.CameraSubject
     self._prevCF = Camera.CFrame
     self._origCF = Camera.CFrame
-    
-    if EventBus then pcall(function() EventBus:Emit("aim:start") end) end
 end
 
 function AimbotLegit:StopAiming()
@@ -679,7 +600,6 @@ function AimbotLegit:StopAiming()
     self._history = {}
     self._controlled = false
     
-    -- Restaurar camera
     Utils.SafeCall(function()
         local Camera = Utils.GetCamera()
         if Camera and LocalPlayer and LocalPlayer.Character then
@@ -691,8 +611,6 @@ function AimbotLegit:StopAiming()
             end
         end
     end, "StopAiming")
-    
-    if EventBus then pcall(function() EventBus:Emit("aim:stop") end) end
 end
 
 function AimbotLegit:HoldAndStop(seconds)
@@ -701,7 +619,6 @@ function AimbotLegit:HoldAndStop(seconds)
 end
 
 function AimbotLegit:CalcSmooth(smoothing)
-    -- Usa SmoothingFactor do settings
     smoothing = smoothing or Settings.SmoothingFactor or 5
     
     if not smoothing or smoothing <= 0 then return 1.0 end
@@ -757,7 +674,6 @@ function AimbotLegit:ApplyAim(targetPos, smoothing)
     local method = Settings.AimMethod or "Camera"
     local smoothFactor = self:CalcSmooth(smoothing)
     
-    -- Deadzone check
     if Settings.UseDeadzone then
         local success, screenPos, onScreen = pcall(function()
             return Camera:WorldToViewportPoint(targetPos)
@@ -793,7 +709,6 @@ function AimbotLegit:Method_Cam(targetPos, smoothFactor)
         
         local targetCF = CFrame.lookAt(camPos, targetPos)
         
-        -- Legit: sempre lerp suave
         local currentRot = Camera.CFrame.Rotation
         local targetRot = targetCF.Rotation
         local smoothedRot = currentRot:Lerp(targetRot, smoothFactor)
@@ -843,11 +758,11 @@ end
 function AimbotLegit:Update(mouseHold)
     if not self._init then return end
     
-    SyncSettings()
-    
     pcall(function() Utils.VisibilityCache:NextFrame() end)
     
     local holdActive = self._holdUntil and tick() < self._holdUntil
+    
+    -- USA SETTINGS.AIMBOTACTIVE DIRETAMENTE
     local shouldBeActive = (Settings.AimbotActive and mouseHold) or holdActive
     
     if not shouldBeActive then
@@ -912,7 +827,6 @@ function AimbotLegit:Update(mouseHold)
             
             local smoothing = Settings.SmoothingFactor or 5
             
-            -- Adaptive smoothing
             if Settings.UseAdaptiveSmoothing then
                 local Camera = Utils.GetCamera()
                 if Camera then
@@ -926,10 +840,6 @@ function AimbotLegit:Update(mouseHold)
             end
             
             self:ApplyAim(aimPos, smoothing)
-            
-            if EventBus then
-                pcall(function() EventBus:Emit("aim:applied", target, aimPos) end)
-            end
         else
             Lock:Clear()
             self:StopAiming()
@@ -950,19 +860,6 @@ function AimbotLegit:Toggle(enabled)
         Lock:Clear()
         self:StopAiming()
     end
-end
-
-function AimbotLegit:SetTargetMode(mode)
-    Settings.TargetMode = mode
-end
-
-function AimbotLegit:SetAimOutsideFOV(enabled)
-    Settings.AimOutsideFOV = enabled
-end
-
-function AimbotLegit:SetAimbotFOV(fov)
-    Settings.AimbotFOV = fov
-    Settings.FOV = fov
 end
 
 function AimbotLegit:GetCurrentTarget()
@@ -1004,9 +901,7 @@ function AimbotLegit:Initialize(deps)
     end
     
     Utils = deps.Utils
-    Settings = deps.Settings
-    EventBus = deps.EventBus
-    Hooks = deps.Hooks
+    Settings = deps.Settings  -- USA O SETTINGS DO MAIN!
     LocalPlayer = deps.LocalPlayer
     
     if not Utils then
@@ -1014,20 +909,15 @@ function AimbotLegit:Initialize(deps)
         return nil
     end
     
-    SyncSettings()
-    self:DetectMethods()
-    
-    if EventBus then
-        pcall(function()
-            EventBus:On("target:killed", function()
-                if Settings.AutoResetOnKill then
-                    self:HoldAndStop(0.2)
-                end
-            end)
-        end)
+    if not Settings then
+        warn("[AimbotLegit] Settings not available")
+        return nil
     end
     
+    self:DetectMethods()
+    
     self._init = true
+    print("[AimbotLegit] Initialized with global Settings")
     return self
 end
 
