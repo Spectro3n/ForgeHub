@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB - UI MODULE v4.0 (ULTRA RAGE EDITION)
+-- FORGEHUB - UI MODULE v4.1 (FIXED)
 -- ============================================================================
 
 local Core = _G.ForgeHubCore
@@ -26,7 +26,7 @@ local LocalPlayer = Core.LocalPlayer
 local Players = Core.Players
 
 -- ============================================================================
--- SETTINGS SYNC
+-- SETTINGS SYNC (CORRIGIDO: Adiciona AimbotToggleOnly)
 -- ============================================================================
 local function EnsureSettingsCompat()
     Settings.ESP = Settings.ESP or {}
@@ -71,6 +71,11 @@ local function EnsureSettingsCompat()
     
     -- Aimbot FOV
     Settings.AimbotFOV = Settings.AimbotFOV or 180
+    
+    -- CORREÇÃO: Nova configuração AimbotToggleOnly
+    if Settings.AimbotToggleOnly == nil then
+        Settings.AimbotToggleOnly = false
+    end
 end
 
 EnsureSettingsCompat()
@@ -108,7 +113,7 @@ local function InitializeVisuals()
         TriggerFOVCircle.Radius = Settings.TriggerFOV or 50
         TriggerFOVCircle.Filled = false
         TriggerFOVCircle.Visible = false
-        TriggerFOVCircle.Color = Color3.fromRGB(255, 255, 0) -- Amarelo para Trigger
+        TriggerFOVCircle.Color = Color3.fromRGB(255, 255, 0)
         TriggerFOVCircle.Transparency = 1
     end
     
@@ -154,26 +159,47 @@ local function UpdateVisuals()
     if TargetIndicator then
         local shouldShow = false
         
-        if Settings.ShowTargetIndicator and Settings.AimbotActive and State.MouseHold then
-            local Aimbot = Core.Aimbot
+        -- CORREÇÃO: Verificar se deve mostrar baseado em AimbotToggleOnly
+        local aimbotWorking = Settings.AimbotActive and (Settings.AimbotToggleOnly or State.MouseHold)
+        
+        if Settings.ShowTargetIndicator and aimbotWorking then
+            local currentTarget = nil
             
-            if Aimbot and Aimbot.CameraBypass then
-                local lockedTarget = Aimbot.CameraBypass:GetLockedTarget()
+            -- Tentar obter target de várias formas
+            if Core.Aimbot and Core.Aimbot.GetCurrentTarget then
+                currentTarget = Core.Aimbot.GetCurrentTarget()
+            elseif Core.Aimbot and Core.Aimbot.CameraBypass and Core.Aimbot.CameraBypass.GetLockedTarget then
+                currentTarget = Core.Aimbot.CameraBypass:GetLockedTarget()
+            end
+            
+            if currentTarget then
+                local data = nil
                 
-                if lockedTarget then
-                    local data = nil
-                    
-                    if SemanticEngine and SemanticEngine.GetCachedPlayerData then
-                        data = SemanticEngine:GetCachedPlayerData(lockedTarget)
+                if SemanticEngine and SemanticEngine.GetCachedPlayerData then
+                    data = SemanticEngine:GetCachedPlayerData(currentTarget)
+                end
+                
+                -- Fallback
+                if not data or not data.isValid then
+                    local char = currentTarget.Character
+                    if char then
+                        local anchor = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
+                        if anchor then
+                            data = { isValid = true, anchor = anchor }
+                        end
                     end
-                    
-                    if data and data.isValid and data.anchor then
-                        local success2, result = pcall(function()
-                            return Camera:WorldToViewportPoint(data.anchor.Position)
+                end
+                
+                if data and data.isValid and data.anchor then
+                    local cam = Camera or workspace.CurrentCamera
+                    if cam then
+                        local screenSuccess, result = pcall(function()
+                            return cam:WorldToViewportPoint(data.anchor.Position)
                         end)
                         
-                        if success2 then
-                            local screenPos, onScreen = result, select(2, Camera:WorldToViewportPoint(data.anchor.Position))
+                        if screenSuccess and result then
+                            local screenPos = result
+                            local _, onScreen = cam:WorldToViewportPoint(data.anchor.Position)
                             
                             if onScreen then
                                 TargetIndicator.Position = Vector2.new(screenPos.X, screenPos.Y)
@@ -182,16 +208,16 @@ local function UpdateVisuals()
                                 local pulse = math.abs(math.sin(tick() * 5))
                                 
                                 if Settings.GodRageMode then
-                                    TargetIndicator.Color = Color3.fromRGB(255, 215 * pulse, 0) -- Gold
+                                    TargetIndicator.Color = Color3.fromRGB(255, 215 * pulse, 0)
                                     TargetIndicator.Radius = 15
                                 elseif Settings.UltraRageMode then
-                                    TargetIndicator.Color = Color3.fromRGB(255, 0, 255 * pulse) -- Magenta
+                                    TargetIndicator.Color = Color3.fromRGB(255, 0, 255 * pulse)
                                     TargetIndicator.Radius = 12
                                 elseif Settings.RageMode then
-                                    TargetIndicator.Color = Color3.fromRGB(255, 100 * pulse, 0) -- Orange
+                                    TargetIndicator.Color = Color3.fromRGB(255, 100 * pulse, 0)
                                     TargetIndicator.Radius = 10
                                 else
-                                    TargetIndicator.Color = Color3.fromRGB(0, 255 * pulse, 0) -- Green
+                                    TargetIndicator.Color = Color3.fromRGB(0, 255 * pulse, 0)
                                     TargetIndicator.Radius = 8
                                 end
                                 
@@ -208,56 +234,13 @@ local function UpdateVisuals()
 end
 
 -- ============================================================================
--- INPUT HANDLING
--- ============================================================================
--- local function SetupInputHandling()
---     UserInputService.InputBegan:Connect(function(input, gameProcessed)
---         if gameProcessed then return end
-        
---         if isInputMatch and isInputMatch(input, Settings.AimbotUseKey) then 
---             State.MouseHold = true 
---         end
-        
---         if isInputMatch and isInputMatch(input, Settings.AimbotToggleKey) then 
---             Settings.AimbotActive = not Settings.AimbotActive
-            
---             -- ATUALIZA O TOGGLE NA UI
---             if UI.AimbotToggle and UI.AimbotToggle.Set then
---                 pcall(function()
---                     UI.AimbotToggle:Set(Settings.AimbotActive)
---                 end)
---             end
-            
---             if Notify then
---                 local status = Settings.AimbotActive and "ATIVADO ✅" or "DESATIVADO ❌"
---                 if Settings.GodRageMode then
---                     status = status .. " 👑 GOD MODE"
---                 elseif Settings.UltraRageMode then
---                     status = status .. " ⚡ ULTRA"
---                 elseif Settings.RageMode then
---                     status = status .. " 🔥 RAGE"
---                 end
---                 Notify("Aimbot", status)
---             end
---         end
---     end)
-    
---     UserInputService.InputEnded:Connect(function(input, gameProcessed)
---         if gameProcessed then return end
-        
---         if isInputMatch and isInputMatch(input, Settings.AimbotUseKey) then 
---             State.MouseHold = false 
---         end
---     end)
--- end
-
--- ============================================================================
 -- UI
 -- ============================================================================
 local UI = {
     Window = nil,
     StatsLabels = {},
     UpdateConnection = nil,
+    AimbotToggle = nil, -- Referência para atualização dinâmica
 }
 
 local function HandleDropdown(val)
@@ -311,9 +294,9 @@ function UI:CreateInterface()
     end
 
     local Window = Rayfield:CreateWindow({
-        Name = "ForgeHub Ultimate | v4.0 ULTRA RAGE 🔥",
-        LoadingTitle = "Carregando ForgeHub v4.0...",
-        LoadingSubtitle = "🔥 RAGE MODE\n⚡ ULTRA RAGE\n👑 GOD MODE\n✨ MAGIC BULLET",
+        Name = "ForgeHub Ultimate | v4.1 FIXED 🔧",
+        LoadingTitle = "Carregando ForgeHub v4.1...",
+        LoadingSubtitle = "🔧 BUGS CORRIGIDOS\n🔥 RAGE MODE\n⚡ ULTRA RAGE\n👑 GOD MODE",
         Theme = "AmberGlow",
         ToggleUIKeybind = "K",
         ConfigurationSaving = { Enabled = false }
@@ -360,12 +343,32 @@ function UI:CreateInterface()
 
     MainTab:CreateSection("🎯 Configuração Legit")
 
-    MainTab:CreateToggle({
+    -- Guardar referência do toggle para atualização dinâmica
+    self.AimbotToggle = MainTab:CreateToggle({
         Name = "🎯 Ativar Aimbot",
         CurrentValue = Settings.AimbotActive or false,
         Callback = function(v)
             Settings.AimbotActive = v
         end
+    })
+
+    -- NOVA OPÇÃO: Toggle-Only Mode
+    MainTab:CreateToggle({
+        Name = "🔄 Modo Toggle-Only (sem segurar)",
+        CurrentValue = Settings.AimbotToggleOnly or false,
+        Callback = function(v)
+            Settings.AimbotToggleOnly = v
+            if v then
+                Notify("Aimbot", "Toggle-Only: Aimbot ativo sem segurar botão")
+            else
+                Notify("Aimbot", "Normal: Precisa segurar botão para mirar")
+            end
+        end
+    })
+
+    MainTab:CreateParagraph({
+        Title = "ℹ️ Modos de Ativação",
+        Content = "Toggle-Only OFF: Precisa ativar + segurar botão\nToggle-Only ON: Só precisa ativar (automático)"
     })
 
     MainTab:CreateDropdown({
@@ -374,6 +377,19 @@ function UI:CreateInterface()
         CurrentOption = {Settings.AimMethod or "Camera"},
         Callback = function(Option)
             Settings.AimMethod = HandleDropdown(Option)
+            
+            -- Aviso se MouseMoveRel não está disponível
+            if Settings.AimMethod == "MouseMoveRel" then
+                local hasMMR = false
+                if Core.Aimbot and Core.Aimbot.Legit and Core.Aimbot.Legit.HasMMR then
+                    hasMMR = Core.Aimbot.Legit:HasMMR()
+                end
+                
+                if not hasMMR then
+                    Notify("Aviso", "MouseMoveRel não disponível, usando Camera")
+                    Settings.AimMethod = "Camera"
+                end
+            end
         end
     })
 
@@ -445,6 +461,7 @@ function UI:CreateInterface()
         CurrentValue = Settings.IgnoreTeamAimbot or true,
         Callback = function(v)
             Settings.IgnoreTeamAimbot = v
+            Settings.IgnoreTeam = v -- Sincronizar
         end
     })
 
@@ -453,6 +470,14 @@ function UI:CreateInterface()
         CurrentValue = Settings.VisibleCheck or false,
         Callback = function(v)
             Settings.VisibleCheck = v
+        end
+    })
+
+    MainTab:CreateToggle({
+        Name = "🧱 Ignorar Paredes (Wall)",
+        CurrentValue = Settings.IgnoreWalls or false,
+        Callback = function(v)
+            Settings.IgnoreWalls = v
         end
     })
 
@@ -475,10 +500,9 @@ function UI:CreateInterface()
             Settings.PredictionMultiplier = v
         end
     })
-    
 
     -- ========================================================================
-    -- RAGE TAB - TODAS AS OPÇÕES RAGE
+    -- RAGE TAB
     -- ========================================================================
     RageTab:CreateSection("🔥 MODOS RAGE")
 
@@ -700,6 +724,18 @@ function UI:CreateInterface()
             end
         end,
     })
+
+    RageTab:CreateButton({
+        Name = "🐛 Debug Aimbot",
+        Callback = function()
+            if Core.Aimbot and Core.Aimbot.Debug then
+                Core.Aimbot.Debug()
+                Notify("Debug", "Verifique o console (F9)")
+            end
+        end,
+    })
+    
+    RageTab:CreateSection("🚀 TP BULLET")
     
     RageTab:CreateToggle({
         Name = "🚀 Ativar TP Bullet",
@@ -751,8 +787,6 @@ function UI:CreateInterface()
         end
     })
 
-    RageTab:CreateSection("⚙️ Configurações")
-
     RageTab:CreateToggle({
         Name = "↩️ Retornar Após Tiro",
         CurrentValue = Settings.TPBulletReturn or true,
@@ -764,50 +798,9 @@ function UI:CreateInterface()
         end
     })
 
-    RageTab:CreateSlider({
-        Name = "⏱️ Delay de Retorno",
-        Range = {0, 0.5},
-        Increment = 0.05,
-        CurrentValue = Settings.TPBulletReturnDelay or 0.1,
-        Callback = function(v)
-            Settings.TPBulletReturnDelay = v
-        end
-    })
-
-    RageTab:CreateButton({
-        Name = "↩️ Forçar Retorno",
-        Callback = function()
-            if Core.Aimbot and Core.Aimbot.ForceTPReturn then
-                Core.Aimbot.ForceTPReturn()
-                Notify("TP Bullet", "Retornado à posição original")
-            end
-        end
-    })
-
-    RageTab:CreateSection("⚠️ Segurança")
-
-    RageTab:CreateToggle({
-        Name = "🛡️ Verificação de Segurança",
-        CurrentValue = true,
-        Callback = function(v)
-            Settings.TPBulletSafety = v
-        end
-    })
-
-    RageTab:CreateSlider({
-     Name = "📏 Distância Máxima de TP",
-        Range = {50, 1000},
-        Increment = 50,
-        CurrentValue = 500,
-        Callback = function(v)
-            Settings.TPBulletMaxDistance = v
-        end
-    })
-
     RageTab:CreateButton({
         Name = "💀 ATIVAR TUDO (FULL RAGE)",
         Callback = function()
-            -- Ativa tudo
             Settings.RageMode = true
             Settings.UltraRageMode = true
             Settings.GodRageMode = true
@@ -816,6 +809,7 @@ function UI:CreateInterface()
             Settings.AutoSwitch = true
             Settings.IgnoreWalls = true
             Settings.MultiPartAim = true
+            Settings.AimbotToggleOnly = true -- Ativa toggle-only também
             
             if Core.Aimbot then
                 if Core.Aimbot.SetGodRageMode then
@@ -840,6 +834,7 @@ function UI:CreateInterface()
             Settings.AutoFire = false
             Settings.AutoSwitch = false
             Settings.IgnoreWalls = false
+            Settings.AimbotToggleOnly = false
             
             if Core.Aimbot then
                 if Core.Aimbot.SetGodRageMode then
@@ -1019,12 +1014,18 @@ function UI:CreateInterface()
     })
     self.StatsLabels.ESPParagraph = espParagraph
 
-    -- Rage Status
     local rageParagraph = SystemTab:CreateParagraph({
         Title = "🔥 Rage Status",
         Content = "Carregando..."
     })
     self.StatsLabels.RageParagraph = rageParagraph
+
+    -- NOVO: Aimbot Debug Info
+    local aimbotDebugParagraph = SystemTab:CreateParagraph({
+        Title = "🎯 Aimbot Status",
+        Content = "Carregando..."
+    })
+    self.StatsLabels.AimbotDebugParagraph = aimbotDebugParagraph
 
     SystemTab:CreateSection("🔧 Controles")
 
@@ -1097,8 +1098,8 @@ function UI:CreateInterface()
     SystemTab:CreateSection("ℹ️ Informações")
 
     SystemTab:CreateParagraph({
-        Title = "ForgeHub v4.0 ULTRA RAGE",
-        Content = "🔥 Rage Mode\n⚡ Ultra Rage Mode\n👑 God Rage Mode\n✨ Magic Bullet\n⚡ Trigger Bot com FOV"
+        Title = "ForgeHub v4.1 FIXED",
+        Content = "🔧 DebugPrint corrigido\n🔄 Toggle-Only mode\n🔥 Rage Modes\n⚡ Trigger Bot com FOV"
     })
 
     self:StartStatsUpdateLoop()
@@ -1159,7 +1160,6 @@ function UI:UpdateStats()
             })
         end
         
-        -- Rage Status
         if self.StatsLabels.RageParagraph and self.StatsLabels.RageParagraph.Set then
             local rageStatus = Settings.RageMode and "🔥" or "❌"
             local ultraStatus = Settings.UltraRageMode and "⚡" or "❌"
@@ -1169,10 +1169,42 @@ function UI:UpdateStats()
             self.StatsLabels.RageParagraph:Set({
                 Title = "🔥 Rage Status",
                 Content = string.format(
-                    "Rage: %s | Ultra: %s | God: %s\n Magic: %s | Trigger: %s",
+                    "Rage: %s | Ultra: %s | God: %s\nTrigger: %s",
                     rageStatus, ultraStatus, godStatus,
                     triggerStatus
                 )
+            })
+        end
+        
+        -- NOVO: Aimbot Debug Info
+        if self.StatsLabels.AimbotDebugParagraph and self.StatsLabels.AimbotDebugParagraph.Set then
+            local aimbotInfo = "N/A"
+            
+            if Core.Aimbot and Core.Aimbot.Legit and Core.Aimbot.Legit.GetDebugInfo then
+                local info = Core.Aimbot.Legit:GetDebugInfo()
+                if info then
+                    local targetName = info.currentTarget or "Nenhum"
+                    local mmr = info.hasMMR and "✅" or "❌"
+                    local active = info.active and "✅" or "❌"
+                    local toggleOnly = Settings.AimbotToggleOnly and "✅" or "❌"
+                    
+                    aimbotInfo = string.format(
+                        "Ativo: %s | MMR: %s | Toggle-Only: %s\nAlvo: %s",
+                        active, mmr, toggleOnly, targetName
+                    )
+                end
+            else
+                local aimbotActive = Settings.AimbotActive and "✅" or "❌"
+                local toggleOnly = Settings.AimbotToggleOnly and "✅" or "❌"
+                aimbotInfo = string.format(
+                    "Ativado: %s | Toggle-Only: %s",
+                    aimbotActive, toggleOnly
+                )
+            end
+            
+            self.StatsLabels.AimbotDebugParagraph:Set({
+                Title = "🎯 Aimbot Status",
+                Content = aimbotInfo
             })
         end
     end, "StatsUpdate")
@@ -1194,7 +1226,6 @@ end
 function UI:Initialize()
     EnsureSettingsCompat()
     InitializeVisuals()
-    -- SetupInputHandling()
     
     RunService.RenderStepped:Connect(function()
         SafeCall(function()
@@ -1205,7 +1236,7 @@ function UI:Initialize()
     task.delay(1, function()
         SafeCall(function()
             self:CreateInterface()
-            print("[UI] Interface v4.0 ULTRA RAGE criada!")
+            print("[UI] Interface v4.1 FIXED criada!")
         end, "UICreation")
     end)
 end
