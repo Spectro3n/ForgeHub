@@ -122,50 +122,50 @@ end)
 -- ============================================================================
 -- DETECTAR MouseMoveRel
 -- ============================================================================
-local DetectedMouseMoveRel = nil
+-- local DetectedMouseMoveRel = nil
 
-local function DetectMouseMoveRel()
-    local mmrNames = {"mousemoverel", "mouse_moverel", "MouseMoveRel", "movemouserel"}
+-- local function DetectMouseMoveRel()
+--     local mmrNames = {"mousemoverel", "mouse_moverel", "MouseMoveRel", "movemouserel"}
 
-    -- Tentar getgenv
-    if getgenv then
-        for _, name in ipairs(mmrNames) do
-            local success, func = pcall(function() return getgenv()[name] end)
-            if success and type(func) == "function" then
-                DetectedMouseMoveRel = func
-                print("[ForgeHub] MouseMoveRel detectado via getgenv:", name)
-                return func
-            end
-        end
-    end
+--     -- Tentar getgenv
+--     if getgenv then
+--         for _, name in ipairs(mmrNames) do
+--             local success, func = pcall(function() return getgenv()[name] end)
+--             if success and type(func) == "function" then
+--                 DetectedMouseMoveRel = func
+--                 print("[ForgeHub] MouseMoveRel detectado via getgenv:", name)
+--                 return func
+--             end
+--         end
+--     end
 
-    -- Tentar _G
-    for _, name in ipairs(mmrNames) do
-        local success, func = pcall(function() return _G[name] end)
-        if success and type(func) == "function" then
-            DetectedMouseMoveRel = func
-            print("[ForgeHub] MouseMoveRel detectado via _G:", name)
-            return func
-        end
-    end
+--     -- Tentar _G
+--     for _, name in ipairs(mmrNames) do
+--         local success, func = pcall(function() return _G[name] end)
+--         if success and type(func) == "function" then
+--             DetectedMouseMoveRel = func
+--             print("[ForgeHub] MouseMoveRel detectado via _G:", name)
+--             return func
+--         end
+--     end
 
-    -- Tentar shared
-    if shared then
-        for _, name in ipairs(mmrNames) do
-            local success, func = pcall(function() return shared[name] end)
-            if success and type(func) == "function" then
-                DetectedMouseMoveRel = func
-                print("[ForgeHub] MouseMoveRel detectado via shared:", name)
-                return func
-            end
-        end
-    end
+--     -- Tentar shared
+--     if shared then
+--         for _, name in ipairs(mmrNames) do
+--             local success, func = pcall(function() return shared[name] end)
+--             if success and type(func) == "function" then
+--                 DetectedMouseMoveRel = func
+--                 print("[ForgeHub] MouseMoveRel detectado via shared:", name)
+--                 return func
+--             end
+--         end
+--     end
 
-    print("[ForgeHub] MouseMoveRel NÃO detectado")
-    return nil
-end
+--     print("[ForgeHub] MouseMoveRel NÃO detectado")
+--     return nil
+-- end
 
-DetectMouseMoveRel()
+-- DetectMouseMoveRel()
 
 -- ============================================================================
 -- GLOBAL SETTINGS
