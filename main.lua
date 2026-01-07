@@ -363,8 +363,8 @@ _G.ForgeHubCore = {
     -- Drawing
     DrawingOK = DrawingOK,
     
-    -- MouseMoveRel
-    MouseMoveRel = DetectedMouseMoveRel,
+    -- -- MouseMoveRel
+    -- MouseMoveRel = DetectedMouseMoveRel,
 }
 
 local Core = _G.ForgeHubCore
@@ -454,7 +454,7 @@ if AimbotLegitModule and AimbotUtils then
         UserInputService = UserInputService,
         Players = Players,
         Camera = Camera,
-        MouseMoveRel = DetectedMouseMoveRel,
+        -- MouseMoveRel = DetectedMouseMoveRel,
         Workspace = Workspace,
         RunService = RunService,
     }

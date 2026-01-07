@@ -168,78 +168,78 @@ local ExecutorFuncs = {
 local LastMouseMove = 0
 local MouseMoveInterval = 1/200 -- ~200 chamadas/s máximo
 
-local function InitExecutorFuncs()
-    local mmrCheck = {
-        "mousemoverel", 
-        "mouse_moverel", 
-        "MouseMoveRel",
-        "Input.MouseMove",
-        "movemouserel",
-    }
+-- local function InitExecutorFuncs()
+--     local mmrCheck = {
+--         "mousemoverel", 
+--         "mouse_moverel", 
+--         "MouseMoveRel",
+--         "Input.MouseMove",
+--         "movemouserel",
+--     }
     
-    -- Tentar getgenv primeiro
-    if getgenv then
-        for _, name in ipairs(mmrCheck) do
-            local success, func = pcall(function()
-                return getgenv()[name]
-            end)
+--     -- Tentar getgenv primeiro
+--     if getgenv then
+--         for _, name in ipairs(mmrCheck) do
+--             local success, func = pcall(function()
+--                 return getgenv()[name]
+--             end)
             
-            if success and type(func) == "function" then
-                ExecutorFuncs.mouseMove = func
-                ExecutorFuncs.isAvailable = true
-                DebugPrint("MouseMoveRel encontrado via getgenv:", name)
-                return true
-            end
-        end
-    end
+--             if success and type(func) == "function" then
+--                 ExecutorFuncs.mouseMove = func
+--                 ExecutorFuncs.isAvailable = true
+--                 DebugPrint("MouseMoveRel encontrado via getgenv:", name)
+--                 return true
+--             end
+--         end
+--     end
     
-    -- Tentar _G
-    for _, name in ipairs(mmrCheck) do
-        local success, func = pcall(function()
-            return _G[name]
-        end)
+--     -- Tentar _G
+--     for _, name in ipairs(mmrCheck) do
+--         local success, func = pcall(function()
+--             return _G[name]
+--         end)
         
-        if success and type(func) == "function" then
-            ExecutorFuncs.mouseMove = func
-            ExecutorFuncs.isAvailable = true
-            DebugPrint("MouseMoveRel encontrado via _G:", name)
-            return true
-        end
-    end
+--         if success and type(func) == "function" then
+--             ExecutorFuncs.mouseMove = func
+--             ExecutorFuncs.isAvailable = true
+--             DebugPrint("MouseMoveRel encontrado via _G:", name)
+--             return true
+--         end
+--     end
     
-    -- Tentar getfenv
-    for _, name in ipairs(mmrCheck) do
-        local success, func = pcall(function()
-            return getfenv()[name]
-        end)
+--     -- Tentar getfenv
+--     for _, name in ipairs(mmrCheck) do
+--         local success, func = pcall(function()
+--             return getfenv()[name]
+--         end)
         
-        if success and type(func) == "function" then
-            ExecutorFuncs.mouseMove = func
-            ExecutorFuncs.isAvailable = true
-            DebugPrint("MouseMoveRel encontrado via getfenv:", name)
-            return true
-        end
-    end
+--         if success and type(func) == "function" then
+--             ExecutorFuncs.mouseMove = func
+--             ExecutorFuncs.isAvailable = true
+--             DebugPrint("MouseMoveRel encontrado via getfenv:", name)
+--             return true
+--         end
+--     end
     
-    -- Tentar shared
-    if shared then
-        for _, name in ipairs(mmrCheck) do
-            local success, func = pcall(function()
-                return shared[name]
-            end)
+--     -- Tentar shared
+--     if shared then
+--         for _, name in ipairs(mmrCheck) do
+--             local success, func = pcall(function()
+--                 return shared[name]
+--             end)
             
-            if success and type(func) == "function" then
-                ExecutorFuncs.mouseMove = func
-                ExecutorFuncs.isAvailable = true
-                DebugPrint("MouseMoveRel encontrado via shared:", name)
-                return true
-            end
-        end
-    end
+--             if success and type(func) == "function" then
+--                 ExecutorFuncs.mouseMove = func
+--                 ExecutorFuncs.isAvailable = true
+--                 DebugPrint("MouseMoveRel encontrado via shared:", name)
+--                 return true
+--             end
+--         end
+--     end
     
-    DebugPrint("MouseMoveRel NÃO encontrado, usando Camera method")
-    return false
-end
+--     DebugPrint("MouseMoveRel NÃO encontrado, usando Camera method")
+--     return false
+-- end
 
 -- NOVO: Inicialização com respeito ao AimSafety
 local function TryInitExecutor()
