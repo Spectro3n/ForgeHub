@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB - UI MODULE v4.1 (FIXED)
+-- FORGEHUB - UI MODULE v4.2 (FIXED)
 -- ============================================================================
 
 local Core = _G.ForgeHubCore
@@ -26,7 +26,7 @@ local LocalPlayer = Core.LocalPlayer
 local Players = Core.Players
 
 -- ============================================================================
--- SETTINGS SYNC (CORRIGIDO: Adiciona AimbotToggleOnly)
+-- SETTINGS SYNC
 -- ============================================================================
 local function EnsureSettingsCompat()
     Settings.ESP = Settings.ESP or {}
@@ -72,9 +72,14 @@ local function EnsureSettingsCompat()
     -- Aimbot FOV
     Settings.AimbotFOV = Settings.AimbotFOV or 180
     
-    -- CORREÇÃO: Nova configuração AimbotToggleOnly
+    -- Toggle-only mode
     if Settings.AimbotToggleOnly == nil then
         Settings.AimbotToggleOnly = false
+    end
+    
+    -- AimSafety (NOVO)
+    if Settings.AimSafety == nil then
+        Settings.AimSafety = false
     end
 end
 
@@ -159,13 +164,11 @@ local function UpdateVisuals()
     if TargetIndicator then
         local shouldShow = false
         
-        -- CORREÇÃO: Verificar se deve mostrar baseado em AimbotToggleOnly
         local aimbotWorking = Settings.AimbotActive and (Settings.AimbotToggleOnly or State.MouseHold)
         
         if Settings.ShowTargetIndicator and aimbotWorking then
             local currentTarget = nil
             
-            -- Tentar obter target de várias formas
             if Core.Aimbot and Core.Aimbot.GetCurrentTarget then
                 currentTarget = Core.Aimbot.GetCurrentTarget()
             elseif Core.Aimbot and Core.Aimbot.CameraBypass and Core.Aimbot.CameraBypass.GetLockedTarget then
@@ -179,7 +182,6 @@ local function UpdateVisuals()
                     data = SemanticEngine:GetCachedPlayerData(currentTarget)
                 end
                 
-                -- Fallback
                 if not data or not data.isValid then
                     local char = currentTarget.Character
                     if char then
@@ -204,7 +206,6 @@ local function UpdateVisuals()
                             if onScreen then
                                 TargetIndicator.Position = Vector2.new(screenPos.X, screenPos.Y)
                                 
-                                -- Pulse effect baseado no modo
                                 local pulse = math.abs(math.sin(tick() * 5))
                                 
                                 if Settings.GodRageMode then
@@ -240,7 +241,7 @@ local UI = {
     Window = nil,
     StatsLabels = {},
     UpdateConnection = nil,
-    AimbotToggle = nil, -- Referência para atualização dinâmica
+    AimbotToggle = nil,
 }
 
 local function HandleDropdown(val)
@@ -292,11 +293,14 @@ function UI:CreateInterface()
         warn("[UI] Failed to load Rayfield library")
         return nil
     end
+    
+    -- CORREÇÃO: Exportar Rayfield para _G para Notify global funcionar
+    _G.Rayfield = Rayfield
 
     local Window = Rayfield:CreateWindow({
-        Name = "ForgeHub Ultimate | v4.1 FIXED 🔧",
-        LoadingTitle = "Carregando ForgeHub v4.1...",
-        LoadingSubtitle = "🔧 BUGS CORRIGIDOS\n🔥 RAGE MODE\n⚡ ULTRA RAGE\n👑 GOD MODE",
+        Name = "ForgeHub Ultimate | v5.0 STEALTH 🛡️",
+        LoadingTitle = "Carregando ForgeHub v5.0...",
+        LoadingSubtitle = "🛡️ AIM SAFETY MODE\n🔥 RAGE MODE\n⚡ ULTRA RAGE\n👑 GOD MODE",
         Theme = "AmberGlow",
         ToggleUIKeybind = "K",
         ConfigurationSaving = { Enabled = false }
@@ -343,7 +347,6 @@ function UI:CreateInterface()
 
     MainTab:CreateSection("🎯 Configuração Legit")
 
-    -- Guardar referência do toggle para atualização dinâmica
     self.AimbotToggle = MainTab:CreateToggle({
         Name = "🎯 Ativar Aimbot",
         CurrentValue = Settings.AimbotActive or false,
@@ -352,7 +355,6 @@ function UI:CreateInterface()
         end
     })
 
-    -- NOVA OPÇÃO: Toggle-Only Mode
     MainTab:CreateToggle({
         Name = "🔄 Modo Toggle-Only (sem segurar)",
         CurrentValue = Settings.AimbotToggleOnly or false,
@@ -366,9 +368,31 @@ function UI:CreateInterface()
         end
     })
 
+    -- NOVO: AimSafety Mode
+    MainTab:CreateToggle({
+        Name = "🛡️ Aim Safety (Anti-Detect)",
+        CurrentValue = Settings.AimSafety or false,
+        Callback = function(v)
+            Settings.AimSafety = v
+            
+            -- Notificar e forçar reconfigure do aimbot
+            if v then
+                Settings.AimMethod = "Camera" -- Força Camera method
+                Notify("🛡️ Safety", "MouseMoveRel DESATIVADO - Usando Camera (mais seguro)")
+            else
+                Notify("⚠️ Safety", "Modo segurança desativado")
+            end
+            
+            -- Reconfigure aimbot se disponível
+            if Core.Aimbot and Core.Aimbot.ReconfigureSafety then
+                Core.Aimbot.ReconfigureSafety(v)
+            end
+        end
+    })
+
     MainTab:CreateParagraph({
         Title = "ℹ️ Modos de Ativação",
-        Content = "Toggle-Only OFF: Precisa ativar + segurar botão\nToggle-Only ON: Só precisa ativar (automático)"
+        Content = "Toggle-Only OFF: Precisa ativar + segurar botão\nToggle-Only ON: Só precisa ativar (automático)\n\n🛡️ Aim Safety: Desativa MouseMoveRel e adiciona humanização"
     })
 
     MainTab:CreateDropdown({
@@ -376,13 +400,20 @@ function UI:CreateInterface()
         Options = {"Camera", "MouseMoveRel"},
         CurrentOption = {Settings.AimMethod or "Camera"},
         Callback = function(Option)
-            Settings.AimMethod = HandleDropdown(Option)
+            local method = HandleDropdown(Option)
             
-            -- Aviso se MouseMoveRel não está disponível
-            if Settings.AimMethod == "MouseMoveRel" then
+            -- Bloquear MMR se AimSafety ativo
+            if method == "MouseMoveRel" and Settings.AimSafety then
+                Notify("⚠️ Bloqueado", "MouseMoveRel bloqueado pelo Aim Safety")
+                return
+            end
+            
+            Settings.AimMethod = method
+            
+            if method == "MouseMoveRel" then
                 local hasMMR = false
-                if Core.Aimbot and Core.Aimbot.Legit and Core.Aimbot.Legit.HasMMR then
-                    hasMMR = Core.Aimbot.Legit:HasMMR()
+                if Core.Aimbot and Core.Aimbot.GetHasMMR then
+                    hasMMR = Core.Aimbot.GetHasMMR()
                 end
                 
                 if not hasMMR then
@@ -461,7 +492,7 @@ function UI:CreateInterface()
         CurrentValue = Settings.IgnoreTeamAimbot or true,
         Callback = function(v)
             Settings.IgnoreTeamAimbot = v
-            Settings.IgnoreTeam = v -- Sincronizar
+            Settings.IgnoreTeam = v
         end
     })
 
@@ -508,7 +539,7 @@ function UI:CreateInterface()
 
     RageTab:CreateParagraph({
         Title = "⚠️ AVISO",
-        Content = "Modos RAGE são muito óbvios!\nUse com cuidado para evitar ban."
+        Content = "Modos RAGE são muito óbvios!\nUse com cuidado para evitar ban.\n\n🛡️ Ative Aim Safety na aba Legit para maior segurança."
     })
 
     RageTab:CreateToggle({
@@ -809,7 +840,7 @@ function UI:CreateInterface()
             Settings.AutoSwitch = true
             Settings.IgnoreWalls = true
             Settings.MultiPartAim = true
-            Settings.AimbotToggleOnly = true -- Ativa toggle-only também
+            Settings.AimbotToggleOnly = true
             
             if Core.Aimbot then
                 if Core.Aimbot.SetGodRageMode then
@@ -1020,12 +1051,18 @@ function UI:CreateInterface()
     })
     self.StatsLabels.RageParagraph = rageParagraph
 
-    -- NOVO: Aimbot Debug Info
     local aimbotDebugParagraph = SystemTab:CreateParagraph({
         Title = "🎯 Aimbot Status",
         Content = "Carregando..."
     })
     self.StatsLabels.AimbotDebugParagraph = aimbotDebugParagraph
+
+    -- NOVO: Safety Status
+    local safetyParagraph = SystemTab:CreateParagraph({
+        Title = "🛡️ Safety Status",
+        Content = "Carregando..."
+    })
+    self.StatsLabels.SafetyParagraph = safetyParagraph
 
     SystemTab:CreateSection("🔧 Controles")
 
@@ -1098,8 +1135,8 @@ function UI:CreateInterface()
     SystemTab:CreateSection("ℹ️ Informações")
 
     SystemTab:CreateParagraph({
-        Title = "ForgeHub v4.1 FIXED",
-        Content = "🔧 DebugPrint corrigido\n🔄 Toggle-Only mode\n🔥 Rage Modes\n⚡ Trigger Bot com FOV"
+        Title = "ForgeHub v5.0 STEALTH",
+        Content = "🛡️ Aim Safety Mode\n🔄 Toggle-Only mode\n🔥 Rage Modes\n⚡ Trigger Bot com FOV\n🎯 Humanização avançada"
     })
 
     self:StartStatsUpdateLoop()
@@ -1176,7 +1213,6 @@ function UI:UpdateStats()
             })
         end
         
-        -- NOVO: Aimbot Debug Info
         if self.StatsLabels.AimbotDebugParagraph and self.StatsLabels.AimbotDebugParagraph.Set then
             local aimbotInfo = "N/A"
             
@@ -1205,6 +1241,25 @@ function UI:UpdateStats()
             self.StatsLabels.AimbotDebugParagraph:Set({
                 Title = "🎯 Aimbot Status",
                 Content = aimbotInfo
+            })
+        end
+        
+        -- NOVO: Safety Status
+        if self.StatsLabels.SafetyParagraph and self.StatsLabels.SafetyParagraph.Set then
+            local safetyOn = Settings.AimSafety and "🛡️ ATIVO" or "⚠️ INATIVO"
+            local method = Settings.AimMethod or "Camera"
+            local hasMMR = "❌"
+            
+            if Core.Aimbot and Core.Aimbot.GetHasMMR then
+                hasMMR = Core.Aimbot.GetHasMMR() and "✅" or "❌"
+            end
+            
+            self.StatsLabels.SafetyParagraph:Set({
+                Title = "🛡️ Safety Status",
+                Content = string.format(
+                    "Aim Safety: %s\nMétodo: %s | MMR Disponível: %s",
+                    safetyOn, method, hasMMR
+                )
             })
         end
     end, "StatsUpdate")
@@ -1236,7 +1291,7 @@ function UI:Initialize()
     task.delay(1, function()
         SafeCall(function()
             self:CreateInterface()
-            print("[UI] Interface v4.1 FIXED criada!")
+            print("[UI] Interface v5.0 STEALTH criada!")
         end, "UICreation")
     end)
 end
