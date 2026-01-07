@@ -1,13 +1,13 @@
 -- ============================================================================
--- FORGEHUB - AIMBOT LEGIT MODULE v5.0 (FULLY FIXED)
--- Versão com todas as correções de segurança e performance
+-- FORGEHUB - AIMBOT LEGIT MODULE v5.0 (NO MouseMoveRel)
+-- Versão limpa sem getgenv/MouseMoveRel - Usa apenas Camera manipulation
+-- Suporta jogos que usam mouse-lock através de simulação via Camera
 -- ============================================================================
 
 local AimbotLegit = {
     _init = false,
     _active = false,
     Active = false,
-    _hasMMR = false,
     _validPos = nil,
     _history = {},
     
@@ -23,6 +23,11 @@ local AimbotLegit = {
     _predHistory = {},
     _lastPredUpdate = {},
     _lastPredCleanup = 0,
+    
+    -- Mouse simulation state
+    _mouseAccumX = 0,
+    _mouseAccumY = 0,
+    _lastMouseUpdate = 0,
     
     -- Debug
     _debugMode = false,
@@ -55,7 +60,7 @@ local function DebugPrint(...)
 end
 
 -- ============================================================================
--- INTERNAL HELPERS (FALLBACKS)
+-- INTERNAL HELPERS
 -- ============================================================================
 
 local function GetCamera()
@@ -156,165 +161,24 @@ local function DistanceSquared(pos1, pos2)
 end
 
 -- ============================================================================
--- EXECUTOR FUNCTIONS (MELHORADO COM SAFETY)
+-- HUMANIZATION HELPERS
 -- ============================================================================
-local ExecutorFuncs = {
-    mouseMove = nil,
-    isAvailable = false,
-    validated = false,
-}
 
--- Rate limiting para MouseMoveRel
-local LastMouseMove = 0
-local MouseMoveInterval = 1/200 -- ~200 chamadas/s máximo
-
--- local function InitExecutorFuncs()
---     local mmrCheck = {
---         "mousemoverel", 
---         "mouse_moverel", 
---         "MouseMoveRel",
---         "Input.MouseMove",
---         "movemouserel",
---     }
-    
---     -- Tentar getgenv primeiro
---     if getgenv then
---         for _, name in ipairs(mmrCheck) do
---             local success, func = pcall(function()
---                 return getgenv()[name]
---             end)
-            
---             if success and type(func) == "function" then
---                 ExecutorFuncs.mouseMove = func
---                 ExecutorFuncs.isAvailable = true
---                 DebugPrint("MouseMoveRel encontrado via getgenv:", name)
---                 return true
---             end
---         end
---     end
-    
---     -- Tentar _G
---     for _, name in ipairs(mmrCheck) do
---         local success, func = pcall(function()
---             return _G[name]
---         end)
-        
---         if success and type(func) == "function" then
---             ExecutorFuncs.mouseMove = func
---             ExecutorFuncs.isAvailable = true
---             DebugPrint("MouseMoveRel encontrado via _G:", name)
---             return true
---         end
---     end
-    
---     -- Tentar getfenv
---     for _, name in ipairs(mmrCheck) do
---         local success, func = pcall(function()
---             return getfenv()[name]
---         end)
-        
---         if success and type(func) == "function" then
---             ExecutorFuncs.mouseMove = func
---             ExecutorFuncs.isAvailable = true
---             DebugPrint("MouseMoveRel encontrado via getfenv:", name)
---             return true
---         end
---     end
-    
---     -- Tentar shared
---     if shared then
---         for _, name in ipairs(mmrCheck) do
---             local success, func = pcall(function()
---                 return shared[name]
---             end)
-            
---             if success and type(func) == "function" then
---                 ExecutorFuncs.mouseMove = func
---                 ExecutorFuncs.isAvailable = true
---                 DebugPrint("MouseMoveRel encontrado via shared:", name)
---                 return true
---             end
---         end
---     end
-    
---     DebugPrint("MouseMoveRel NÃO encontrado, usando Camera method")
---     return false
--- end
-
--- NOVO: Inicialização com respeito ao AimSafety
-local function TryInitExecutor()
-    local ok = InitExecutorFuncs()
-    
-    -- Forçar fallback se AimSafety ativado
-    if ok and Settings and Settings.AimSafety then
-        DebugPrint("AimSafety ON -> desativando MouseMoveRel por segurança")
-        ok = false
-        ExecutorFuncs.mouseMove = nil
-        ExecutorFuncs.isAvailable = false
-    end
-    
-    -- Validar com teste mínimo (handshake)
-    if ok and ExecutorFuncs.mouseMove then
-        local testOk = pcall(function()
-            ExecutorFuncs.mouseMove(0, 0) -- Teste sem movimento
-        end)
-        
-        if not testOk then
-            DebugPrint("MouseMoveRel falhou no teste, desativando")
-            ok = false
-            ExecutorFuncs.mouseMove = nil
-            ExecutorFuncs.isAvailable = false
-        else
-            ExecutorFuncs.validated = true
-            DebugPrint("MouseMoveRel validado com sucesso")
-        end
-    end
-    
-    AimbotLegit._hasMMR = ok
-    return ok
+local function AddMicroJitter(value, intensity)
+    intensity = intensity or 0.1
+    return value + (math.random() - 0.5) * intensity
 end
 
--- NOVO: SafeMouseMove com rate-limit, jitter, e fallback
-local function SafeMouseMove(dx, dy)
-    if not ExecutorFuncs.isAvailable or not ExecutorFuncs.mouseMove then
-        return false
+local function EaseOutQuad(t)
+    return 1 - (1 - t) * (1 - t)
+end
+
+local function EaseInOutQuad(t)
+    if t < 0.5 then
+        return 2 * t * t
+    else
+        return 1 - math.pow(-2 * t + 2, 2) / 2
     end
-    
-    -- Rate limiting
-    local now = tick()
-    if now - LastMouseMove < MouseMoveInterval then
-        return false
-    end
-    LastMouseMove = now
-    
-    dx = tonumber(dx) or 0
-    dy = tonumber(dy) or 0
-    
-    -- Se AimSafety ativado, reduzir intensidade e adicionar micro-jitter
-    if Settings and Settings.AimSafety then
-        local jitterX = (math.random() - 0.5) * 0.4 -- +-0.2
-        local jitterY = (math.random() - 0.5) * 0.4
-        dx = dx * 0.6 + jitterX
-        dy = dy * 0.6 + jitterY
-    end
-    
-    -- Limite máximo de movimento por frame (anti-snap)
-    local maxMove = Settings and Settings.MaxMouseMovePerFrame or 50
-    dx = math.clamp(dx, -maxMove, maxMove)
-    dy = math.clamp(dy, -maxMove, maxMove)
-    
-    -- Tentar com float primeiro, depois integer como fallback
-    local ok = pcall(function() 
-        ExecutorFuncs.mouseMove(dx, dy) 
-    end)
-    
-    if not ok then
-        ok = pcall(function() 
-            ExecutorFuncs.mouseMove(math.floor(dx), math.floor(dy)) 
-        end)
-    end
-    
-    return ok
 end
 
 -- ============================================================================
@@ -335,15 +199,11 @@ function AimbotLegit:PrintDebugInfo()
     print("Active:", self.Active)
     print("Settings.AimbotActive:", Settings and Settings.AimbotActive)
     print("Settings.AimbotToggleOnly:", Settings and Settings.AimbotToggleOnly)
-    print("Settings.AimSafety:", Settings and Settings.AimSafety)
     print("LocalPlayer:", LocalPlayer and LocalPlayer.Name or "nil")
     
     local cam = GetCamera()
     print("Camera:", cam and "OK" or "nil")
-    print("HasMMR:", self._hasMMR)
-    print("MMR Validated:", ExecutorFuncs.validated)
     print("AimMethod:", Settings and Settings.AimMethod or "nil")
-    print("ChosenMethod:", self:ChooseAimMethod())
     
     local playerCount = 0
     local validTargets = 0
@@ -362,19 +222,34 @@ function AimbotLegit:PrintDebugInfo()
     print("Valid targets:", validTargets)
     print("IgnoreTeam:", Settings and (Settings.IgnoreTeam or Settings.IgnoreTeamAimbot))
     print("VisibleCheck:", Settings and Settings.VisibleCheck)
-    print("ConsecutiveErrors:", self._consecutiveErrors)
     print("===================================\n")
 end
 
 -- ============================================================================
--- TARGET LOCK (COM PROTEÇÃO CONTRA RACE CONDITION)
+-- PREDICTION HISTORY CLEANUP
+-- ============================================================================
+function AimbotLegit:CleanupPredHistory()
+    local now = tick()
+    if now - self._lastPredCleanup < 5 then return end
+    self._lastPredCleanup = now
+    
+    for playerId, lastUpdate in pairs(self._lastPredUpdate) do
+        if now - lastUpdate > 5 then
+            self._predHistory[playerId] = nil
+            self._lastPredUpdate[playerId] = nil
+        end
+    end
+end
+
+-- ============================================================================
+-- TARGET LOCK
 -- ============================================================================
 local Lock = {
     Current = nil,
     Time = 0,
     Score = math.huge,
     Kills = 0,
-    _updating = false, -- Flag de proteção
+    _updating = false,
 }
 
 function Lock:Clear()
@@ -412,76 +287,71 @@ function Lock:Validate()
 end
 
 function Lock:TryAcquire(candidate, score)
-    -- Proteção contra race condition
+    if not candidate then return end
     if self._updating then return end
+    
     self._updating = true
     
-    local success, err = pcall(function()
-        if not candidate then return end
-        
-        local data = GetPlayerData(candidate)
-        if not data or not data.isValid then return end
-        
-        local now = tick()
-        local maxDur = Settings.MaxLockTime or 1.5
-        local threshold = Settings.LockImprovementThreshold or 0.7
-        
-        -- Primeiro alvo
-        if not self.Current then
-            self.Current = candidate
-            self.Time = now
-            self.Score = score
-            DebugPrint("Locked:", candidate.Name, "Score:", score)
-            return
-        end
-        
-        -- Mesmo alvo
-        if self.Current == candidate then
-            self.Score = score
-            return
-        end
-        
-        -- Alvo atual inválido
-        if not self:Validate() then
-            self.Current = candidate
-            self.Time = now
-            self.Score = score
-            DebugPrint("Switched (invalid):", candidate.Name)
-            return
-        end
-        
-        local lockDur = now - self.Time
-        
-        -- AutoSwitch
-        if Settings.AutoSwitch and lockDur > (Settings.TargetSwitchDelay or 0.3) then
-            self.Current = candidate
-            self.Time = now
-            self.Score = score
-            return
-        end
-        
-        -- Tempo máximo
-        if lockDur > maxDur then
-            self.Current = candidate
-            self.Time = now
-            self.Score = score
-            return
-        end
-        
-        -- Score muito melhor
-        if score < self.Score * threshold then
-            self.Current = candidate
-            self.Time = now
-            self.Score = score
-            DebugPrint("Switched (better):", candidate.Name)
-        end
-    end)
+    local data = GetPlayerData(candidate)
+    if not data or not data.isValid then 
+        self._updating = false
+        return 
+    end
+    
+    local now = tick()
+    local maxDur = Settings.MaxLockTime or 1.5
+    local threshold = Settings.LockImprovementThreshold or 0.7
+    
+    if not self.Current then
+        self.Current = candidate
+        self.Time = now
+        self.Score = score
+        DebugPrint("Locked:", candidate.Name, "Score:", score)
+        self._updating = false
+        return
+    end
+    
+    if self.Current == candidate then
+        self.Score = score
+        self._updating = false
+        return
+    end
+    
+    if not self:Validate() then
+        self.Current = candidate
+        self.Time = now
+        self.Score = score
+        DebugPrint("Switched (invalid):", candidate.Name)
+        self._updating = false
+        return
+    end
+    
+    local lockDur = now - self.Time
+    
+    if Settings.AutoSwitch and lockDur > (Settings.TargetSwitchDelay or 0.3) then
+        self.Current = candidate
+        self.Time = now
+        self.Score = score
+        self._updating = false
+        return
+    end
+    
+    if lockDur > maxDur then
+        self.Current = candidate
+        self.Time = now
+        self.Score = score
+        self._updating = false
+        return
+    end
+    
+    if score < self.Score * threshold then
+        self.Current = candidate
+        self.Time = now
+        self.Score = score
+        DebugPrint("Switched (better):", candidate.Name)
+    end
     
     self._updating = false
-    
-    if not success then
-        DebugPrint("Lock:TryAcquire error:", err)
-    end
 end
 
 function Lock:Get()
@@ -700,33 +570,8 @@ function AimbotLegit:FindBest()
 end
 
 -- ============================================================================
--- PREDICTION (COM CLEANUP DE MEMÓRIA)
+-- PREDICTION
 -- ============================================================================
-function AimbotLegit:CleanupPredHistory()
-    local now = tick()
-    
-    -- Limpar a cada 5 segundos
-    if now - self._lastPredCleanup < 5 then return end
-    self._lastPredCleanup = now
-    
-    local toRemove = {}
-    
-    for playerId, lastUpdate in pairs(self._lastPredUpdate) do
-        if now - lastUpdate > 5 then
-            table.insert(toRemove, playerId)
-        end
-    end
-    
-    for _, playerId in ipairs(toRemove) do
-        self._predHistory[playerId] = nil
-        self._lastPredUpdate[playerId] = nil
-    end
-    
-    if #toRemove > 0 then
-        DebugPrint("Cleaned up", #toRemove, "prediction entries")
-    end
-end
-
 function AimbotLegit:Predict(player, part)
     if not part or not part.Parent then return nil end
     
@@ -745,7 +590,6 @@ function AimbotLegit:Predict(player, part)
     
     if vel.Magnitude < 0.5 then return basePos end
     
-    -- Reduzir componente vertical
     if vel.Y > 0 then
         vel = Vector3.new(vel.X, vel.Y * 0.3, vel.Z)
     end
@@ -763,7 +607,7 @@ function AimbotLegit:Predict(player, part)
         return basePos
     end
     
-    -- Atualizar histórico
+    -- Update prediction history
     local playerId = player.UserId
     self._predHistory[playerId] = predicted
     self._lastPredUpdate[playerId] = tick()
@@ -772,31 +616,7 @@ function AimbotLegit:Predict(player, part)
 end
 
 -- ============================================================================
--- AIM METHOD SELECTION (NOVO - CONTROLE CENTRALIZADO)
--- ============================================================================
-function AimbotLegit:ChooseAimMethod()
-    -- Preferir Camera se:
-    -- 1. MMR não disponível
-    -- 2. AimSafety ativado
-    -- 3. AimMethod não é MouseMoveRel
-    
-    if not self._hasMMR then
-        return "CAM"
-    end
-    
-    if Settings and Settings.AimSafety then
-        return "CAM"
-    end
-    
-    if Settings and Settings.AimMethod == "MouseMoveRel" then
-        return "MMR"
-    end
-    
-    return "CAM"
-end
-
--- ============================================================================
--- AIM APPLICATION (MELHORADO)
+-- SMOOTHING CALCULATION
 -- ============================================================================
 function AimbotLegit:CalcSmooth(smoothing)
     smoothing = smoothing or Settings.SmoothingFactor or 5
@@ -808,15 +628,6 @@ function AimbotLegit:CalcSmooth(smoothing)
     if smoothing <= 8 then return 0.18 end
     if smoothing <= 12 then return 0.1 end
     return math.clamp(0.6 / smoothing, 0.02, 0.08)
-end
-
--- NOVO: Easing exponencial para movimentos mais naturais
-local function EaseOutExpo(t)
-    return t == 1 and 1 or 1 - math.pow(2, -10 * t)
-end
-
-local function EaseInOutQuad(t)
-    return t < 0.5 and 2 * t * t or 1 - math.pow(-2 * t + 2, 2) / 2
 end
 
 function AimbotLegit:CalculateAdaptiveSmoothing(data)
@@ -831,10 +642,8 @@ function AimbotLegit:CalculateAdaptiveSmoothing(data)
     
     local distSq = DistanceSquared(data.anchor.Position, cam.CFrame.Position)
     
-    -- Perto: mais suave (maior smoothing)
     if distSq < 2500 then -- < 50 studs
         return smoothing * 1.5
-    -- Longe: mais rápido (menor smoothing)
     elseif distSq > 90000 then -- > 300 studs
         return smoothing * 0.6
     end
@@ -842,6 +651,142 @@ function AimbotLegit:CalculateAdaptiveSmoothing(data)
     return smoothing
 end
 
+-- ============================================================================
+-- AIM APPLICATION - CAMERA METHOD (PRIMARY)
+-- ============================================================================
+function AimbotLegit:Method_Camera(targetPos, smoothFactor)
+    local success = pcall(function()
+        self._active = true
+        
+        local cam = GetCamera()
+        if not cam then 
+            error("Camera is nil")
+        end
+        
+        local camPos = cam.CFrame.Position
+        local dir = targetPos - camPos
+        
+        if dir.Magnitude < 0.001 then return end
+        
+        local targetCF = CFrame.lookAt(camPos, targetPos)
+        local currentRot = cam.CFrame.Rotation
+        local targetRot = targetCF.Rotation
+        
+        -- Use easing for more human-like movement
+        local easedFactor = smoothFactor
+        if Settings.AimSafety then
+            easedFactor = EaseOutQuad(smoothFactor) * 0.8
+        end
+        
+        local smoothedRot = currentRot:Lerp(targetRot, easedFactor)
+        
+        -- Add micro-jitter if AimSafety is on
+        if Settings.AimSafety then
+            local jitterX = AddMicroJitter(0, 0.001)
+            local jitterY = AddMicroJitter(0, 0.001)
+            smoothedRot = smoothedRot * CFrame.Angles(jitterY, jitterX, 0)
+        end
+        
+        local newCFrame = CFrame.new(camPos) * smoothedRot
+        cam.CFrame = newCFrame
+    end)
+    
+    if not success then
+        self._consecutiveErrors = (self._consecutiveErrors or 0) + 1
+        
+        if self._debugMode then
+            warn("[Aimbot] Method_Camera error")
+        end
+        
+        if self._consecutiveErrors > self._maxConsecutiveErrors then
+            DebugPrint("Method_Camera: Too many errors, resetting...")
+            self:ForceReset()
+            
+            task.delay(0.5, function()
+                self._consecutiveErrors = 0
+            end)
+        end
+        
+        return false
+    end
+    
+    self._consecutiveErrors = 0
+    return true
+end
+
+-- ============================================================================
+-- AIM APPLICATION - MOUSE SIMULATION VIA CAMERA (ALTERNATIVE)
+-- Simulates mouse movement by calculating screen-space deltas
+-- Works for games that use mouse-lock or first-person mechanics
+-- ============================================================================
+function AimbotLegit:Method_MouseSim(targetPos, smoothFactor)
+    local success = pcall(function()
+        self._active = true
+        
+        local cam = GetCamera()
+        if not cam then return end
+        
+        -- Get screen position of target
+        local screenPos, onScreen = cam:WorldToViewportPoint(targetPos)
+        if not onScreen then 
+            -- Target off screen - use camera method instead
+            return self:Method_Camera(targetPos, smoothFactor)
+        end
+        
+        local viewport = cam.ViewportSize
+        local centerX = viewport.X / 2
+        local centerY = viewport.Y / 2
+        
+        -- Calculate delta from screen center to target
+        local deltaX = screenPos.X - centerX
+        local deltaY = screenPos.Y - centerY
+        
+        -- Check deadzone
+        local deltaMagnitude = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+        local deadzone = Settings.DeadzoneRadius or 2
+        
+        if deltaMagnitude < deadzone then
+            return true -- Already on target
+        end
+        
+        -- Apply smoothing with easing
+        local easedFactor = smoothFactor
+        if Settings.AimSafety then
+            easedFactor = EaseInOutQuad(smoothFactor) * 0.7
+        end
+        
+        -- Convert screen delta to camera rotation
+        -- This simulates what mouse movement would do
+        local sensitivity = 0.002 -- Base sensitivity multiplier
+        local rotX = -deltaY * sensitivity * easedFactor
+        local rotY = -deltaX * sensitivity * easedFactor
+        
+        -- Add humanization
+        if Settings.AimSafety then
+            rotX = AddMicroJitter(rotX, 0.0005)
+            rotY = AddMicroJitter(rotY, 0.0005)
+        end
+        
+        -- Apply rotation to camera
+        local currentCF = cam.CFrame
+        local newCF = currentCF * CFrame.Angles(rotX, rotY, 0)
+        
+        -- Clamp vertical rotation to prevent camera flip
+        local _, currentY, _ = currentCF:ToEulerAnglesYXZ()
+        local newX, newY, newZ = newCF:ToEulerAnglesYXZ()
+        
+        -- Limit pitch (up/down)
+        newX = math.clamp(newX, -math.rad(89), math.rad(89))
+        
+        cam.CFrame = CFrame.new(currentCF.Position) * CFrame.Angles(newX, newY, newZ)
+    end)
+    
+    return success
+end
+
+-- ============================================================================
+-- MAIN AIM APPLICATION
+-- ============================================================================
 function AimbotLegit:ApplyAim(targetPos, smoothing)
     if not targetPos then return false end
     if not IsValidPosition(targetPos) then return false end
@@ -849,9 +794,10 @@ function AimbotLegit:ApplyAim(targetPos, smoothing)
     local cam = GetCamera()
     if not cam then return false end
     
+    local method = Settings.AimMethod or "Camera"
     local smoothFactor = self:CalcSmooth(smoothing)
     
-    -- Deadzone check ANTES de qualquer movimento
+    -- Deadzone check
     if Settings.UseDeadzone then
         local screenPos, onScreen
         local success = pcall(function()
@@ -867,128 +813,22 @@ function AimbotLegit:ApplyAim(targetPos, smoothing)
             if mouseSuccess and mousePos then
                 local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
                 local deadzone = Settings.DeadzoneRadius or 2
-                if dist < deadzone then 
-                    return true -- Já no alvo, não precisa mover
-                end
+                if dist < deadzone then return true end
             end
         end
     end
     
-    -- Escolher método
-    local method = self:ChooseAimMethod()
-    
-    if method == "MMR" then
-        return self:Method_MMR(targetPos, smoothFactor)
+    -- Choose method
+    if method == "Mouse" then
+        return self:Method_MouseSim(targetPos, smoothFactor)
     else
-        return self:Method_Cam(targetPos, smoothFactor)
+        -- Default: Camera method
+        return self:Method_Camera(targetPos, smoothFactor)
     end
-end
-
-function AimbotLegit:Method_Cam(targetPos, smoothFactor)
-    local success, errorMsg = pcall(function()
-        self._active = true
-        
-        local cam = GetCamera()
-        if not cam then 
-            error("Camera is nil")
-        end
-        
-        local camPos = cam.CFrame.Position
-        local dir = targetPos - camPos
-        
-        if dir.Magnitude < 0.001 then return end
-        
-        local targetCF = CFrame.lookAt(camPos, targetPos)
-        
-        local currentRot = cam.CFrame.Rotation
-        local targetRot = targetCF.Rotation
-        
-        -- Aplicar easing para movimento mais natural
-        local easedFactor = smoothFactor
-        if Settings.AimSafety then
-            -- Usar easing exponencial para parecer mais humano
-            easedFactor = EaseOutExpo(smoothFactor) * 0.8
-        end
-        
-        local smoothedRot = currentRot:Lerp(targetRot, easedFactor)
-        
-        -- Adicionar micro-jitter se AimSafety ativo
-        if Settings.AimSafety then
-            local jitter = CFrame.Angles(
-                (math.random() - 0.5) * 0.001,
-                (math.random() - 0.5) * 0.001,
-                0
-            )
-            smoothedRot = smoothedRot * jitter
-        end
-        
-        local newCFrame = CFrame.new(camPos) * smoothedRot
-        cam.CFrame = newCFrame
-    end)
-    
-    if not success then
-        self._consecutiveErrors = (self._consecutiveErrors or 0) + 1
-        
-        if self._debugMode then
-            warn("[Aimbot] Method_Cam error:", errorMsg)
-        end
-        
-        if self._consecutiveErrors > self._maxConsecutiveErrors then
-            DebugPrint("Method_Cam: Too many errors, resetting...")
-            self:ForceReset()
-            
-            -- Recuperar após delay
-            task.delay(0.5, function()
-                self._consecutiveErrors = 0
-            end)
-        end
-        
-        return false
-    end
-    
-    self._consecutiveErrors = 0
-    return true
-end
-
-function AimbotLegit:Method_MMR(targetPos, smoothFactor)
-    if not self._hasMMR then
-        return self:Method_Cam(targetPos, smoothFactor)
-    end
-    
-    local success = pcall(function()
-        self._active = true
-        
-        local cam = GetCamera()
-        if not cam then return end
-        
-        local screenPos, onScreen
-        local screenSuccess = pcall(function()
-            screenPos, onScreen = cam:WorldToViewportPoint(targetPos)
-        end)
-        
-        if not screenSuccess or not onScreen then return end
-        
-        local viewport = cam.ViewportSize
-        local centerX = viewport.X / 2
-        local centerY = viewport.Y / 2
-        
-        local deltaX = screenPos.X - centerX
-        local deltaY = screenPos.Y - centerY
-        
-        local moveX = deltaX * smoothFactor
-        local moveY = deltaY * smoothFactor
-        
-        -- Deadzone para MMR também
-        if math.abs(moveX) < 0.1 and math.abs(moveY) < 0.1 then return end
-        
-        SafeMouseMove(moveX, moveY)
-    end)
-    
-    return success
 end
 
 -- ============================================================================
--- MAIN UPDATE (REFATORADO)
+-- DEACTIVATION
 -- ============================================================================
 function AimbotLegit:Deactivate()
     self.Active = false
@@ -1000,11 +840,48 @@ function AimbotLegit:Deactivate()
     end
 end
 
-function AimbotLegit:ProcessAim()
-    -- Cleanup periódico
+-- ============================================================================
+-- MAIN UPDATE
+-- ============================================================================
+function AimbotLegit:Update(mouseHold)
+    if not self._init then 
+        DebugPrint("Not initialized!")
+        return 
+    end
+    
+    -- Debug periódico
+    if self._debugMode then
+        self:PrintDebugInfo()
+    end
+    
+    -- Cleanup prediction history periodically
     self:CleanupPredHistory()
     
-    -- Encontrar melhor alvo
+    local holdActive = self._holdUntil and tick() < self._holdUntil
+    
+    -- Determine if should be active
+    local shouldBeActive = false
+    
+    if holdActive then
+        shouldBeActive = true
+    elseif Settings.AimbotActive then
+        if Settings.AimbotToggleOnly then
+            shouldBeActive = true
+        else
+            shouldBeActive = mouseHold
+        end
+    end
+    
+    if not shouldBeActive then
+        if self.Active then
+            self:Deactivate()
+        end
+        return
+    end
+    
+    self.Active = true
+    
+    -- Find best target
     local bestTarget, bestScore = self:FindBest()
     
     if bestTarget then
@@ -1012,6 +889,7 @@ function AimbotLegit:ProcessAim()
     end
     
     local target = Lock:Get()
+    
     if not target then return end
     
     local data = GetPlayerData(target)
@@ -1021,6 +899,7 @@ function AimbotLegit:ProcessAim()
     end
     
     local aimPart = self:GetPart(target, Settings.AimPart)
+    
     if not aimPart or not aimPart.Parent then
         Lock:Clear()
         return
@@ -1034,52 +913,16 @@ function AimbotLegit:ProcessAim()
     end
 end
 
-function AimbotLegit:Update(mouseHold)
-    if not self._init then 
-        DebugPrint("Not initialized!")
-        return 
-    end
-    
-    -- Debug periódico
-    if self._debugMode then
-        self:PrintDebugInfo()
-    end
-    
-    local holdActive = self._holdUntil and tick() < self._holdUntil
-    
-    -- Determinar se deve estar ativo
-    local shouldBeActive = false
-    
-    if holdActive then
-        shouldBeActive = true
-    elseif Settings.AimbotActive then
-        if Settings.AimbotToggleOnly then
-            -- Toggle-only: sempre ativo quando ligado
-            shouldBeActive = true
-        else
-            -- Normal: precisa segurar botão
-            shouldBeActive = mouseHold
-        end
-    end
-    
-    if not shouldBeActive then
-        if self.Active then
-            self:Deactivate()
-        end
-        return
-    end
-    
-    self.Active = true
-    self:ProcessAim()
-end
-
 -- ============================================================================
 -- PUBLIC API
 -- ============================================================================
 function AimbotLegit:Toggle(enabled)
     Settings.AimbotActive = enabled
     if not enabled then
-        self:Deactivate()
+        self.Active = false
+        self._holdUntil = nil
+        Lock:Clear()
+        self._active = false
     end
 end
 
@@ -1092,6 +935,8 @@ function AimbotLegit:ForceReset()
     self._active = false
     self._holdUntil = nil
     self._consecutiveErrors = 0
+    self._mouseAccumX = 0
+    self._mouseAccumY = 0
     Lock:Clear()
     self._predHistory = {}
     self._lastPredUpdate = {}
@@ -1105,28 +950,14 @@ function AimbotLegit:HoldAndStop(seconds)
     self._holdUntil = tick() + seconds
 end
 
-function AimbotLegit:HasMMR()
-    return self._hasMMR
-end
-
 function AimbotLegit:GetDebugInfo()
     return {
         init = self._init,
         active = self.Active,
-        hasMMR = self._hasMMR,
-        mmrValidated = ExecutorFuncs.validated,
         currentTarget = Lock.Current and Lock.Current.Name or nil,
         consecutiveErrors = self._consecutiveErrors,
-        aimMethod = self:ChooseAimMethod(),
-        aimSafety = Settings and Settings.AimSafety or false,
+        aimMethod = Settings and Settings.AimMethod or "Camera",
     }
-end
-
--- NOVO: Revalidar MMR (útil após mudança de settings)
-function AimbotLegit:RevalidateMMR()
-    DebugPrint("Revalidating MouseMoveRel...")
-    TryInitExecutor()
-    return self._hasMMR
 end
 
 -- ============================================================================
@@ -1138,14 +969,14 @@ function AimbotLegit:Initialize(deps)
         return self 
     end
     
-    print("[AimbotLegit] Initializing v5.0 FIXED...")
+    print("[AimbotLegit] Initializing v5.0 (No MouseMoveRel)...")
     
     if not deps then
         warn("[AimbotLegit] No dependencies provided!")
         return nil
     end
     
-    -- Armazenar dependências
+    -- Store dependencies
     Utils = deps.Utils
     Settings = deps.Settings
     LocalPlayer = deps.LocalPlayer or Players.LocalPlayer
@@ -1161,59 +992,26 @@ function AimbotLegit:Initialize(deps)
         return nil
     end
     
-    -- Garantir defaults
+    -- Ensure defaults
     if Settings.AimbotToggleOnly == nil then
         Settings.AimbotToggleOnly = false
     end
     
-    if Settings.AimSafety == nil then
-        Settings.AimSafety = false
+    if Settings.AimMethod == nil then
+        Settings.AimMethod = "Camera"
     end
     
-    if Settings.MaxMouseMovePerFrame == nil then
-        Settings.MaxMouseMovePerFrame = 50
-    end
-    
-    -- Usar deps.MouseMoveRel se fornecido
-    if deps.MouseMoveRel and type(deps.MouseMoveRel) == "function" then
-        ExecutorFuncs.mouseMove = deps.MouseMoveRel
-        ExecutorFuncs.isAvailable = true
-        print("[AimbotLegit] ✓ MouseMoveRel fornecido via deps")
-        
-        -- Ainda respeitar AimSafety
-        if Settings.AimSafety then
-            ExecutorFuncs.mouseMove = nil
-            ExecutorFuncs.isAvailable = false
-            self._hasMMR = false
-            print("[AimbotLegit] ⚠ AimSafety ativo, MMR desativado")
-        else
-            -- Validar
-            local testOk = pcall(function()
-                deps.MouseMoveRel(0, 0)
-            end)
-            
-            if testOk then
-                ExecutorFuncs.validated = true
-                self._hasMMR = true
-            else
-                ExecutorFuncs.mouseMove = nil
-                ExecutorFuncs.isAvailable = false
-                self._hasMMR = false
-            end
-        end
-    else
-        -- Detectar automaticamente com respeito ao AimSafety
-        TryInitExecutor()
+    -- Remove MouseMoveRel option from AimMethod if set
+    if Settings.AimMethod == "MouseMoveRel" then
+        Settings.AimMethod = "Camera"
+        print("[AimbotLegit] MouseMoveRel não suportado, usando Camera")
     end
     
     self._init = true
     self._consecutiveErrors = 0
-    self._lastPredCleanup = tick()
     
     print("[AimbotLegit] ✓ Initialized successfully")
-    print("[AimbotLegit] MouseMoveRel:", self._hasMMR and "Available" or "Not available (using Camera)")
-    print("[AimbotLegit] MMR Validated:", ExecutorFuncs.validated and "Yes" or "No")
-    print("[AimbotLegit] AimSafety:", Settings.AimSafety and "ON" or "OFF")
+    print("[AimbotLegit] AimMethod:", Settings.AimMethod)
     print("[AimbotLegit] Utils:", Utils and "Loaded" or "Using fallbacks")
     print("[AimbotLegit] Camera:", Camera and "OK" or "nil")
     print("[AimbotLegit] AimbotToggleOnly:", Settings.AimbotToggleOnly and "ON" or "OFF")

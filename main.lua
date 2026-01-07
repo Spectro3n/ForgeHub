@@ -1,9 +1,10 @@
 -- ============================================================================
--- FORGEHUB ULTIMATE v24.2 - MAIN LOADER (FULLY FIXED)
+-- FORGEHUB ULTIMATE v24.2 - MAIN LOADER (NO MouseMoveRel)
 -- ============================================================================
 
--- CORREÇÃO: Verificação segura de script duplicado
+-- Proteção contra execução duplicada
 if _G.ForgeHubLoaded then
+    -- Notificar apenas se Rayfield já existir
     if _G.Rayfield and type(_G.Rayfield.Notify) == "function" then
         pcall(function()
             _G.Rayfield:Notify({
@@ -78,22 +79,6 @@ local function isInputMatch(inputObject, settingKey)
 end
 
 -- ============================================================================
--- CAMERA REFERENCE (CORRIGIDO: Auto-update)
--- ============================================================================
-local function GetCamera()
-    return Workspace.CurrentCamera or Workspace:FindFirstChildOfClass("Camera")
-end
-
-Camera = GetCamera()
-
-Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-    Camera = GetCamera()
-    if _G.ForgeHubCore then
-        _G.ForgeHubCore.Camera = Camera
-    end
-end)
-
--- ============================================================================
 -- PLAYER CACHE
 -- ============================================================================
 local CachedPlayers = {}
@@ -120,54 +105,6 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 end)
 
 -- ============================================================================
--- DETECTAR MouseMoveRel
--- ============================================================================
--- local DetectedMouseMoveRel = nil
-
--- local function DetectMouseMoveRel()
---     local mmrNames = {"mousemoverel", "mouse_moverel", "MouseMoveRel", "movemouserel"}
-
---     -- Tentar getgenv
---     if getgenv then
---         for _, name in ipairs(mmrNames) do
---             local success, func = pcall(function() return getgenv()[name] end)
---             if success and type(func) == "function" then
---                 DetectedMouseMoveRel = func
---                 print("[ForgeHub] MouseMoveRel detectado via getgenv:", name)
---                 return func
---             end
---         end
---     end
-
---     -- Tentar _G
---     for _, name in ipairs(mmrNames) do
---         local success, func = pcall(function() return _G[name] end)
---         if success and type(func) == "function" then
---             DetectedMouseMoveRel = func
---             print("[ForgeHub] MouseMoveRel detectado via _G:", name)
---             return func
---         end
---     end
-
---     -- Tentar shared
---     if shared then
---         for _, name in ipairs(mmrNames) do
---             local success, func = pcall(function() return shared[name] end)
---             if success and type(func) == "function" then
---                 DetectedMouseMoveRel = func
---                 print("[ForgeHub] MouseMoveRel detectado via shared:", name)
---                 return func
---             end
---         end
---     end
-
---     print("[ForgeHub] MouseMoveRel NÃO detectado")
---     return nil
--- end
-
--- DetectMouseMoveRel()
-
--- ============================================================================
 -- GLOBAL SETTINGS
 -- ============================================================================
 local Settings = {
@@ -188,7 +125,7 @@ local Settings = {
     AimbotUseKey = "MouseButton2",
     AimbotToggleKey = "Q",
     AimPart = "Head",
-    AimMethod = "Camera",
+    AimMethod = "Camera", -- "Camera" ou "Mouse" (simulação via camera)
     SmoothingFactor = 5,
     MaxDistance = 2000,
     IgnoreTeamAimbot = true,
@@ -295,10 +232,9 @@ local Settings = {
     HighlightOutlineColor = Color3.fromRGB(255, 255, 255),
     HighlightTransparency = 0.5,
     
-    -- NOVO: Aim Safety
+    -- Aim Safety
     AimSafety = false,
     MaxCameraFailures = 5,
-    MaxMouseMovePerFrame = 50,
 }
 
 local State = {
@@ -307,23 +243,6 @@ local State = {
     Connections = {},
     CameraFailCount = 0,
 }
-
--- ============================================================================
--- SETTINGS SYNC FUNCTION
--- ============================================================================
-local function SyncSettings()
-    Settings.IgnoreTeam = Settings.IgnoreTeamAimbot
-    Settings.FOV = Settings.AimbotFOV
-    
-    -- Sync ESP settings
-    if Settings.ESP then
-        Settings.ESP.Enabled = Settings.ESPEnabled
-        Settings.ESP.IgnoreTeam = Settings.IgnoreTeamESP
-    end
-end
-
--- Chamar sync inicial
-SyncSettings()
 
 -- ============================================================================
 -- CHECK DRAWING API
@@ -342,14 +261,12 @@ _G.ForgeHubCore = {
     CoreGui = CoreGui,
     LocalPlayer = LocalPlayer,
     Camera = Camera,
-    GetCamera = GetCamera,
     
     -- Utilities
     Notify = Notify,
     SafeCall = SafeCall,
     NormalizeKey = NormalizeKey,
     isInputMatch = isInputMatch,
-    SyncSettings = SyncSettings,
     
     -- Data
     Settings = Settings,
@@ -362,9 +279,6 @@ _G.ForgeHubCore = {
     
     -- Drawing
     DrawingOK = DrawingOK,
-    
-    -- -- MouseMoveRel
-    -- MouseMoveRel = DetectedMouseMoveRel,
 }
 
 local Core = _G.ForgeHubCore
@@ -412,7 +326,7 @@ if not ESP then return end
 Core.ESP = ESP
 
 -- ============================================================================
--- AIMBOT - CARREGAMENTO MODULAR
+-- AIMBOT - CARREGAMENTO MODULAR v24.2
 -- ============================================================================
 Notify("ForgeHub", "🎯 Carregando Sistema de Mira...")
 
@@ -435,7 +349,6 @@ local TargetLock = nil
 if AimbotLegitModule and AimbotUtils then
     print("[ForgeHub] Módulos de Aimbot carregados, inicializando...")
     
-    -- Sincronizar settings
     if AimbotSettingsModule and type(AimbotSettingsModule) == "table" then
         for key, value in pairs(AimbotSettingsModule) do
             if type(value) ~= "function" and Settings[key] == nil then
@@ -444,9 +357,9 @@ if AimbotLegitModule and AimbotUtils then
         end
     end
     
-    SyncSettings()
+    Settings.IgnoreTeam = Settings.IgnoreTeamAimbot
     
-    -- SharedDeps
+    -- SharedDeps - SEM MouseMoveRel
     local SharedDeps = {
         Utils = AimbotUtils,
         Settings = Settings,
@@ -454,12 +367,10 @@ if AimbotLegitModule and AimbotUtils then
         UserInputService = UserInputService,
         Players = Players,
         Camera = Camera,
-        -- MouseMoveRel = DetectedMouseMoveRel,
         Workspace = Workspace,
         RunService = RunService,
     }
     
-    -- Obter referências
     if AimbotLegitModule.Aimbot then
         Aimbot = AimbotLegitModule.Aimbot
     elseif type(AimbotLegitModule) == "table" and AimbotLegitModule.Initialize then
@@ -470,23 +381,12 @@ if AimbotLegitModule and AimbotUtils then
         TargetLock = AimbotLegitModule.TargetLock
     end
     
-    -- Inicializar Aimbot Legit
     if Aimbot and Aimbot.Initialize then
         local initSuccess, initError = pcall(function()
             Aimbot:Initialize(SharedDeps)
         end)
         if initSuccess then
-            print("[ForgeHub] ✓ Aimbot Legit inicializado")
-            
-            if Aimbot._hasMMR then
-                print("[ForgeHub] ✓ MouseMoveRel disponível no Aimbot")
-            else
-                print("[ForgeHub] ⚠ MouseMoveRel não disponível, usando Camera method")
-            end
-            
-            if Settings.AimSafety then
-                print("[ForgeHub] 🛡️ AimSafety ativo - MMR desativado por segurança")
-            end
+            print("[ForgeHub] ✓ Aimbot Legit inicializado (v5.0 - No MMR)")
         else
             warn("[ForgeHub] ✗ Falha ao inicializar Aimbot Legit: " .. tostring(initError))
         end
@@ -494,7 +394,6 @@ if AimbotLegitModule and AimbotUtils then
     
     SharedDeps.Aimbot = Aimbot
     
-    -- Inicializar Rage Module
     if AimbotRageModule then
         if AimbotRageModule.Rage then
             Rage = AimbotRageModule.Rage
@@ -513,7 +412,6 @@ if AimbotLegitModule and AimbotUtils then
         SharedDeps.Rage = Rage
     end
     
-    -- Inicializar TP Bullet
     if TPBulletModule then
         if TPBulletModule.TPBullet then
             TPBullet = TPBulletModule.TPBullet
@@ -532,7 +430,6 @@ if AimbotLegitModule and AimbotUtils then
         SharedDeps.TPBullet = TPBullet
     end
     
-    -- Inicializar Trigger
     if AimbotTrigger and AimbotTrigger.Initialize then
         local initSuccess = pcall(function()
             AimbotTrigger:Initialize(SharedDeps)
@@ -543,7 +440,7 @@ if AimbotLegitModule and AimbotUtils then
     end
     
     -- ========================================================================
-    -- CLICK SIMULATION
+    -- SIMPLE CLICK SIMULATION
     -- ========================================================================
     local function SimulateClick()
         local success = false
@@ -732,14 +629,13 @@ if AimbotLegitModule and AimbotUtils then
             end)
             
             print("═══════════════════════════════════════════")
-            print("  SISTEMA DE MIRA v24.2 FIXED")
+            print("  SISTEMA DE MIRA v24.2 (NO MouseMoveRel)")
             print("═══════════════════════════════════════════")
             print("[✓] Aimbot: " .. (Aimbot and "OK" or "N/A"))
             print("[✓] Rage: " .. (Rage and "OK" or "N/A"))
             print("[✓] TP Bullet: " .. (TPBullet and "OK" or "N/A"))
             print("[✓] Trigger: " .. (AimbotTrigger and "OK" or "N/A"))
-            print("[✓] MouseMoveRel: " .. (DetectedMouseMoveRel and "Detectado" or "Não disponível"))
-            print("[✓] AimSafety: " .. (Settings.AimSafety and "ON" or "OFF"))
+            print("[✓] AimMethod: " .. (Settings.AimMethod or "Camera"))
             print("═══════════════════════════════════════════")
         end,
         
@@ -759,20 +655,15 @@ if AimbotLegitModule and AimbotUtils then
             return Settings.AimbotToggleOnly
         end,
         
-        -- NOVO: Aim Safety
-        SetAimSafety = function(enabled)
-            Settings.AimSafety = enabled
-            
-            -- Revalidar MMR
-            if Aimbot and Aimbot.RevalidateMMR then
-                Aimbot:RevalidateMMR()
+        SetAimMethod = function(method)
+            -- Apenas Camera e Mouse são suportados
+            if method == "Camera" or method == "Mouse" then
+                Settings.AimMethod = method
+                Notify("Aimbot", "Método: " .. method)
+            else
+                warn("[Aimbot] Método não suportado:", method)
+                Settings.AimMethod = "Camera"
             end
-            
-            Notify("Aim Safety", enabled and "🛡️ ATIVADO - MMR desativado" or "❌ DESATIVADO")
-        end,
-        
-        GetAimSafety = function()
-            return Settings.AimSafety
         end,
         
         SetTargetMode = function(mode)
@@ -898,6 +789,11 @@ if AimbotLegitModule and AimbotUtils then
             Settings.PredictionMultiplier = mult
         end,
         
+        SetAimSafety = function(enabled)
+            Settings.AimSafety = enabled
+            Notify("Aim Safety", enabled and "ATIVADO 🛡️" or "DESATIVADO")
+        end,
+        
         ForceReset = function()
             print("[Aimbot] Force reset")
             AimbotState:Reset()
@@ -918,32 +814,19 @@ if AimbotLegitModule and AimbotUtils then
             return nil
         end,
         
-        GetHasMMR = function()
-            if Aimbot and Aimbot._hasMMR then
-                return true
-            end
-            return DetectedMouseMoveRel ~= nil
-        end,
-        
         GetDebugInfo = function()
-            local aimbotInfo = {}
-            if Aimbot and Aimbot.GetDebugInfo then
-                aimbotInfo = Aimbot:GetDebugInfo()
-            end
-            
             return {
                 AimbotActive = Settings.AimbotActive,
                 ToggleOnly = Settings.AimbotToggleOnly,
-                AimSafety = Settings.AimSafety,
                 MouseHold = State.MouseHold,
-                HasMMR = AimbotAPI.GetHasMMR(),
+                AimMethod = Settings.AimMethod,
                 RageMode = Settings.RageMode,
                 UltraRageMode = Settings.UltraRageMode,
                 GodRageMode = Settings.GodRageMode,
                 TargetMode = Settings.TargetMode,
                 CurrentTarget = AimbotAPI.GetCurrentTarget(),
                 ErrorCount = AimbotState.ErrorCount,
-                AimbotDetails = aimbotInfo,
+                AimSafety = Settings.AimSafety,
             }
         end,
         
@@ -952,8 +835,9 @@ if AimbotLegitModule and AimbotUtils then
             print("\n═══════════════ AIMBOT DEBUG v24.2 ═══════════════")
             print("AimbotActive: " .. tostring(info.AimbotActive))
             print("ToggleOnly: " .. tostring(info.ToggleOnly))
-            print("AimSafety: " .. tostring(info.AimSafety))
             print("MouseHold: " .. tostring(info.MouseHold))
+            print("AimMethod: " .. tostring(info.AimMethod))
+            print("AimSafety: " .. tostring(info.AimSafety))
             print("Connection Active: " .. tostring(AimbotState.Connection ~= nil))
             print("Error Count: " .. tostring(info.ErrorCount))
             print("\n─── TARGET SETTINGS ───")
@@ -965,10 +849,6 @@ if AimbotLegitModule and AimbotUtils then
             print("  RageMode: " .. tostring(info.RageMode))
             print("  UltraRageMode: " .. tostring(info.UltraRageMode))
             print("  GodRageMode: " .. tostring(info.GodRageMode))
-            print("\n─── EXECUTOR ───")
-            print("  HasMMR: " .. tostring(info.HasMMR))
-            print("  AimMethod: " .. tostring(Settings.AimMethod))
-            print("  ChosenMethod: " .. (info.AimbotDetails.aimMethod or "N/A"))
             print("\n─── MODULES ───")
             print("  Aimbot: " .. (Aimbot and "Loaded" or "Not Loaded"))
             print("  Rage: " .. (Rage and "Loaded" or "Not Loaded"))
@@ -998,6 +878,7 @@ if AimbotLegitModule and AimbotUtils then
         Settings = Settings,
         Utils = AimbotUtils,
         
+        -- Legacy Compatibility
         Main = Aimbot,
         CameraBypass = {
             GetLockedTarget = function()
@@ -1016,20 +897,17 @@ if AimbotLegitModule and AimbotUtils then
     
     Core.Aimbot = AimbotAPI
     
-    print("[ForgeHub] ✓ Sistema de Mira v24.2 pronto!")
+    print("[ForgeHub] ✓ Sistema de Mira v24.2 pronto! (Sem MouseMoveRel)")
     
 else
     warn("[ForgeHub] ✗ Falha ao carregar módulos de Aimbot!")
-    warn("[ForgeHub] AimbotLegitModule: " .. tostring(AimbotLegitModule ~= nil))
-    warn("[ForgeHub] AimbotUtils: " .. tostring(AimbotUtils ~= nil))
     
     AimbotAPI = {
         Initialize = function() warn("Aimbot não carregado") end,
         Toggle = function() end,
         SetToggleOnlyMode = function() end,
         GetToggleOnlyMode = function() return false end,
-        SetAimSafety = function() end,
-        GetAimSafety = function() return false end,
+        SetAimMethod = function() end,
         SetRageMode = function() end,
         SetUltraRageMode = function() end,
         SetGodRageMode = function() end,
@@ -1039,9 +917,9 @@ else
         SetAimOutsideFOV = function() end,
         SetTriggerFOV = function() end,
         SetAimbotFOV = function() end,
+        SetAimSafety = function() end,
         ForceReset = function() end,
         GetCurrentTarget = function() return nil end,
-        GetHasMMR = function() return false end,
         GetDebugInfo = function() return {} end,
         Debug = function() print("Aimbot não carregado") end,
         EnableDebug = function() end,
@@ -1104,10 +982,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         
         if Settings.AimbotToggleOnly then
             status = status .. " (Toggle-Only)"
-        end
-        
-        if Settings.AimSafety then
-            status = status .. " 🛡️"
         end
         
         if Settings.GodRageMode then

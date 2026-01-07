@@ -1,5 +1,5 @@
 -- ============================================================================
--- FORGEHUB - UI MODULE v4.2 (FIXED)
+-- FORGEHUB - UI MODULE v4.2 (FIXED - Rayfield Global)
 -- ============================================================================
 
 local Core = _G.ForgeHubCore
@@ -56,12 +56,10 @@ local function EnsureSettingsCompat()
     Settings.ESP.ShowLocalSkeleton = Settings.ESP.ShowLocalSkeleton or false
     Settings.ESP.SkeletonMaxDistance = Settings.ESP.SkeletonMaxDistance or 300
     
-    -- Rage settings defaults
     Settings.RageMode = Settings.RageMode or false
     Settings.UltraRageMode = Settings.UltraRageMode or false
     Settings.GodRageMode = Settings.GodRageMode or false
     
-    -- Trigger Bot defaults
     Settings.TriggerBot = Settings.TriggerBot or false
     Settings.TriggerFOV = Settings.TriggerFOV or 50
     Settings.TriggerDelay = Settings.TriggerDelay or 0.05
@@ -69,24 +67,26 @@ local function EnsureSettingsCompat()
     Settings.TriggerBurstCount = Settings.TriggerBurstCount or 3
     Settings.TriggerHeadOnly = Settings.TriggerHeadOnly or false
     
-    -- Aimbot FOV
     Settings.AimbotFOV = Settings.AimbotFOV or 180
     
-    -- Toggle-only mode
     if Settings.AimbotToggleOnly == nil then
         Settings.AimbotToggleOnly = false
     end
     
-    -- AimSafety (NOVO)
     if Settings.AimSafety == nil then
         Settings.AimSafety = false
+    end
+    
+    -- Default AimMethod to Camera
+    if Settings.AimMethod == nil or Settings.AimMethod == "MouseMoveRel" then
+        Settings.AimMethod = "Camera"
     end
 end
 
 EnsureSettingsCompat()
 
 -- ============================================================================
--- FOV CIRCLES (Aimbot, Trigger)
+-- FOV CIRCLES
 -- ============================================================================
 local FOVCircle = nil
 local TriggerFOVCircle = nil
@@ -98,7 +98,6 @@ local function InitializeVisuals()
         return 
     end
     
-    -- Aimbot FOV Circle
     FOVCircle = DrawingPool:Acquire("Circle")
     if FOVCircle then
         FOVCircle.Thickness = 1.5
@@ -110,7 +109,6 @@ local function InitializeVisuals()
         FOVCircle.Transparency = 1
     end
     
-    -- Trigger Bot FOV Circle
     TriggerFOVCircle = DrawingPool:Acquire("Circle")
     if TriggerFOVCircle then
         TriggerFOVCircle.Thickness = 2
@@ -122,7 +120,6 @@ local function InitializeVisuals()
         TriggerFOVCircle.Transparency = 1
     end
     
-    -- Target Indicator
     TargetIndicator = DrawingPool:Acquire("Circle")
     if TargetIndicator then
         TargetIndicator.Thickness = 3
@@ -144,7 +141,6 @@ local function UpdateVisuals()
     
     local mouseVec = Vector2.new(mousePos.X, mousePos.Y)
     
-    -- Aimbot FOV Circle
     if FOVCircle then
         FOVCircle.Visible = Settings.ShowFOV or false
         FOVCircle.Radius = math.clamp(Settings.AimbotFOV or 180, 1, 5000)
@@ -152,7 +148,6 @@ local function UpdateVisuals()
         FOVCircle.Color = Settings.FOVColor or Color3.fromRGB(255, 255, 255)
     end
 
-    -- Trigger FOV Circle
     if TriggerFOVCircle then
         local showTriggerFOV = Settings.TriggerBot and (Settings.ShowTriggerFOV or false)
         TriggerFOVCircle.Visible = showTriggerFOV
@@ -160,7 +155,6 @@ local function UpdateVisuals()
         TriggerFOVCircle.Position = mouseVec
     end
     
-    -- Target Indicator
     if TargetIndicator then
         local shouldShow = false
         
@@ -171,8 +165,6 @@ local function UpdateVisuals()
             
             if Core.Aimbot and Core.Aimbot.GetCurrentTarget then
                 currentTarget = Core.Aimbot.GetCurrentTarget()
-            elseif Core.Aimbot and Core.Aimbot.CameraBypass and Core.Aimbot.CameraBypass.GetLockedTarget then
-                currentTarget = Core.Aimbot.CameraBypass:GetLockedTarget()
             end
             
             if currentTarget then
@@ -195,35 +187,31 @@ local function UpdateVisuals()
                 if data and data.isValid and data.anchor then
                     local cam = Camera or workspace.CurrentCamera
                     if cam then
-                        local screenSuccess, result = pcall(function()
-                            return cam:WorldToViewportPoint(data.anchor.Position)
+                        local screenPos, onScreen
+                        local screenSuccess = pcall(function()
+                            screenPos, onScreen = cam:WorldToViewportPoint(data.anchor.Position)
                         end)
                         
-                        if screenSuccess and result then
-                            local screenPos = result
-                            local _, onScreen = cam:WorldToViewportPoint(data.anchor.Position)
+                        if screenSuccess and onScreen then
+                            TargetIndicator.Position = Vector2.new(screenPos.X, screenPos.Y)
                             
-                            if onScreen then
-                                TargetIndicator.Position = Vector2.new(screenPos.X, screenPos.Y)
-                                
-                                local pulse = math.abs(math.sin(tick() * 5))
-                                
-                                if Settings.GodRageMode then
-                                    TargetIndicator.Color = Color3.fromRGB(255, 215 * pulse, 0)
-                                    TargetIndicator.Radius = 15
-                                elseif Settings.UltraRageMode then
-                                    TargetIndicator.Color = Color3.fromRGB(255, 0, 255 * pulse)
-                                    TargetIndicator.Radius = 12
-                                elseif Settings.RageMode then
-                                    TargetIndicator.Color = Color3.fromRGB(255, 100 * pulse, 0)
-                                    TargetIndicator.Radius = 10
-                                else
-                                    TargetIndicator.Color = Color3.fromRGB(0, 255 * pulse, 0)
-                                    TargetIndicator.Radius = 8
-                                end
-                                
-                                shouldShow = true
+                            local pulse = math.abs(math.sin(tick() * 5))
+                            
+                            if Settings.GodRageMode then
+                                TargetIndicator.Color = Color3.fromRGB(255, 215 * pulse, 0)
+                                TargetIndicator.Radius = 15
+                            elseif Settings.UltraRageMode then
+                                TargetIndicator.Color = Color3.fromRGB(255, 0, 255 * pulse)
+                                TargetIndicator.Radius = 12
+                            elseif Settings.RageMode then
+                                TargetIndicator.Color = Color3.fromRGB(255, 100 * pulse, 0)
+                                TargetIndicator.Radius = 10
+                            else
+                                TargetIndicator.Color = Color3.fromRGB(0, 255 * pulse, 0)
+                                TargetIndicator.Radius = 8
                             end
+                            
+                            shouldShow = true
                         end
                     end
                 end
@@ -294,13 +282,13 @@ function UI:CreateInterface()
         return nil
     end
     
-    -- CORREÇÃO: Exportar Rayfield para _G para Notify global funcionar
+    -- CORREÇÃO: Definir Rayfield globalmente para Notify funcionar
     _G.Rayfield = Rayfield
 
     local Window = Rayfield:CreateWindow({
-        Name = "ForgeHub Ultimate | v5.0 STEALTH 🛡️",
-        LoadingTitle = "Carregando ForgeHub v5.0...",
-        LoadingSubtitle = "🛡️ AIM SAFETY MODE\n🔥 RAGE MODE\n⚡ ULTRA RAGE\n👑 GOD MODE",
+        Name = "ForgeHub Ultimate | v4.2 (No MMR) 🔧",
+        LoadingTitle = "Carregando ForgeHub v4.2...",
+        LoadingSubtitle = "🔧 SEM MouseMoveRel\n🔥 RAGE MODE\n⚡ ULTRA RAGE\n👑 GOD MODE",
         Theme = "AmberGlow",
         ToggleUIKeybind = "K",
         ConfigurationSaving = { Enabled = false }
@@ -368,60 +356,15 @@ function UI:CreateInterface()
         end
     })
 
-    -- NOVO: AimSafety Mode
-    MainTab:CreateToggle({
-        Name = "🛡️ Aim Safety (Anti-Detect)",
-        CurrentValue = Settings.AimSafety or false,
-        Callback = function(v)
-            Settings.AimSafety = v
-            
-            -- Notificar e forçar reconfigure do aimbot
-            if v then
-                Settings.AimMethod = "Camera" -- Força Camera method
-                Notify("🛡️ Safety", "MouseMoveRel DESATIVADO - Usando Camera (mais seguro)")
-            else
-                Notify("⚠️ Safety", "Modo segurança desativado")
-            end
-            
-            -- Reconfigure aimbot se disponível
-            if Core.Aimbot and Core.Aimbot.ReconfigureSafety then
-                Core.Aimbot.ReconfigureSafety(v)
-            end
-        end
-    })
-
     MainTab:CreateParagraph({
         Title = "ℹ️ Modos de Ativação",
-        Content = "Toggle-Only OFF: Precisa ativar + segurar botão\nToggle-Only ON: Só precisa ativar (automático)\n\n🛡️ Aim Safety: Desativa MouseMoveRel e adiciona humanização"
+        Content = "Toggle-Only OFF: Precisa ativar + segurar botão\nToggle-Only ON: Só precisa ativar (automático)"
     })
 
-    MainTab:CreateDropdown({
-        Name = "🎮 Método de Aim",
-        Options = {"Camera", "MouseMoveRel"},
-        CurrentOption = {Settings.AimMethod or "Camera"},
-        Callback = function(Option)
-            local method = HandleDropdown(Option)
-            
-            -- Bloquear MMR se AimSafety ativo
-            if method == "MouseMoveRel" and Settings.AimSafety then
-                Notify("⚠️ Bloqueado", "MouseMoveRel bloqueado pelo Aim Safety")
-                return
-            end
-            
-            Settings.AimMethod = method
-            
-            if method == "MouseMoveRel" then
-                local hasMMR = false
-                if Core.Aimbot and Core.Aimbot.GetHasMMR then
-                    hasMMR = Core.Aimbot.GetHasMMR()
-                end
-                
-                if not hasMMR then
-                    Notify("Aviso", "MouseMoveRel não disponível, usando Camera")
-                    Settings.AimMethod = "Camera"
-                end
-            end
-        end
+    -- REMOVIDO: Dropdown de AimMethod (agora só usa Camera)
+    MainTab:CreateParagraph({
+        Title = "🎮 Método de Aim",
+        Content = "Usando: Camera Method (mais seguro e compatível)"
     })
 
     MainTab:CreateDropdown({
@@ -532,6 +475,29 @@ function UI:CreateInterface()
         end
     })
 
+    MainTab:CreateSection("🛡️ Segurança")
+
+    MainTab:CreateToggle({
+        Name = "🔒 Aim Safety (Anti-Detecção)",
+        CurrentValue = Settings.AimSafety or false,
+        Callback = function(v)
+            Settings.AimSafety = v
+            if v then
+                Notify("Segurança", "Movimentos mais suaves e humanos")
+            end
+        end
+    })
+
+    MainTab:CreateSlider({
+        Name = "🎲 Humanização (Jitter)",
+        Range = {0, 5},
+        Increment = 0.5,
+        CurrentValue = Settings.HumanJitter or 0,
+        Callback = function(v)
+            Settings.HumanJitter = v
+        end
+    })
+
     -- ========================================================================
     -- RAGE TAB
     -- ========================================================================
@@ -539,7 +505,7 @@ function UI:CreateInterface()
 
     RageTab:CreateParagraph({
         Title = "⚠️ AVISO",
-        Content = "Modos RAGE são muito óbvios!\nUse com cuidado para evitar ban.\n\n🛡️ Ative Aim Safety na aba Legit para maior segurança."
+        Content = "Modos RAGE são muito óbvios!\nUse com cuidado para evitar ban."
     })
 
     RageTab:CreateToggle({
@@ -1057,13 +1023,6 @@ function UI:CreateInterface()
     })
     self.StatsLabels.AimbotDebugParagraph = aimbotDebugParagraph
 
-    -- NOVO: Safety Status
-    local safetyParagraph = SystemTab:CreateParagraph({
-        Title = "🛡️ Safety Status",
-        Content = "Carregando..."
-    })
-    self.StatsLabels.SafetyParagraph = safetyParagraph
-
     SystemTab:CreateSection("🔧 Controles")
 
     SystemTab:CreateButton({
@@ -1135,8 +1094,8 @@ function UI:CreateInterface()
     SystemTab:CreateSection("ℹ️ Informações")
 
     SystemTab:CreateParagraph({
-        Title = "ForgeHub v5.0 STEALTH",
-        Content = "🛡️ Aim Safety Mode\n🔄 Toggle-Only mode\n🔥 Rage Modes\n⚡ Trigger Bot com FOV\n🎯 Humanização avançada"
+        Title = "ForgeHub v4.2 (No MMR)",
+        Content = "🔧 Sem MouseMoveRel (mais seguro)\n🎮 Apenas Camera Method\n🔥 Rage Modes\n⚡ Trigger Bot com FOV"
     })
 
     self:StartStatsUpdateLoop()
@@ -1214,51 +1173,23 @@ function UI:UpdateStats()
         end
         
         if self.StatsLabels.AimbotDebugParagraph and self.StatsLabels.AimbotDebugParagraph.Set then
-            local aimbotInfo = "N/A"
+            local aimbotActive = Settings.AimbotActive and "✅" or "❌"
+            local toggleOnly = Settings.AimbotToggleOnly and "✅" or "❌"
+            local safety = Settings.AimSafety and "✅" or "❌"
             
-            if Core.Aimbot and Core.Aimbot.Legit and Core.Aimbot.Legit.GetDebugInfo then
-                local info = Core.Aimbot.Legit:GetDebugInfo()
-                if info then
-                    local targetName = info.currentTarget or "Nenhum"
-                    local mmr = info.hasMMR and "✅" or "❌"
-                    local active = info.active and "✅" or "❌"
-                    local toggleOnly = Settings.AimbotToggleOnly and "✅" or "❌"
-                    
-                    aimbotInfo = string.format(
-                        "Ativo: %s | MMR: %s | Toggle-Only: %s\nAlvo: %s",
-                        active, mmr, toggleOnly, targetName
-                    )
+            local targetName = "Nenhum"
+            if Core.Aimbot and Core.Aimbot.GetCurrentTarget then
+                local target = Core.Aimbot.GetCurrentTarget()
+                if target then
+                    targetName = target.Name
                 end
-            else
-                local aimbotActive = Settings.AimbotActive and "✅" or "❌"
-                local toggleOnly = Settings.AimbotToggleOnly and "✅" or "❌"
-                aimbotInfo = string.format(
-                    "Ativado: %s | Toggle-Only: %s",
-                    aimbotActive, toggleOnly
-                )
             end
             
             self.StatsLabels.AimbotDebugParagraph:Set({
                 Title = "🎯 Aimbot Status",
-                Content = aimbotInfo
-            })
-        end
-        
-        -- NOVO: Safety Status
-        if self.StatsLabels.SafetyParagraph and self.StatsLabels.SafetyParagraph.Set then
-            local safetyOn = Settings.AimSafety and "🛡️ ATIVO" or "⚠️ INATIVO"
-            local method = Settings.AimMethod or "Camera"
-            local hasMMR = "❌"
-            
-            if Core.Aimbot and Core.Aimbot.GetHasMMR then
-                hasMMR = Core.Aimbot.GetHasMMR() and "✅" or "❌"
-            end
-            
-            self.StatsLabels.SafetyParagraph:Set({
-                Title = "🛡️ Safety Status",
                 Content = string.format(
-                    "Aim Safety: %s\nMétodo: %s | MMR Disponível: %s",
-                    safetyOn, method, hasMMR
+                    "Ativo: %s | Toggle-Only: %s\nSafety: %s | Alvo: %s",
+                    aimbotActive, toggleOnly, safety, targetName
                 )
             })
         end
@@ -1291,7 +1222,7 @@ function UI:Initialize()
     task.delay(1, function()
         SafeCall(function()
             self:CreateInterface()
-            print("[UI] Interface v5.0 STEALTH criada!")
+            print("[UI] Interface v4.2 (No MMR) criada!")
         end, "UICreation")
     end)
 end
