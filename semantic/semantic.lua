@@ -1,37 +1,3 @@
--- ============================================================================
--- FORGEHUB - SEMANTIC ENGINE MODULE v3.0 (ENTERPRISE GRADE)
--- ============================================================================
---[[
-    CHANGELOG v3.0:
-    ═══════════════════════════════════════════════════════════════════════════
-    ARQUITETURA:
-    • Dependency Injection completo (Players, Workspace, RunService injetáveis)
-    • Adapter pattern para ambientes diferentes (Roblox, Mock, Test)
-    • Time provider injetável para testes determinísticos
-    • Event system injetável
-    
-    HARDENING:
-    • Validação defensiva em TODAS as funções públicas
-    • pcall/xpcall padronizado com error tracking
-    • Nil-checks antes de qualquer acesso a .Parent, .Name, etc
-    • Rate limiting e throttling em operações pesadas
-    
-    TESTABILIDADE:
-    • Sistema de mocks integrado
-    • Testes unitários incluídos
-    • Comportamento 100% determinístico quando em modo test
-    
-    OBSERVABILIDADE:
-    • Métricas detalhadas (GetMetrics())
-    • Logging estruturado com níveis
-    • Performance tracking
-    
-    COMPATIBILIDADE:
-    • Todos os nomes de funções originais mantidos
-    • Aliases para funções renomeadas (se houver)
-    • CompatibilityReport() atualizado
-    ═══════════════════════════════════════════════════════════════════════════
-]]
 
 -- ============================================================================
 -- MODULE DEFINITION
@@ -1466,9 +1432,8 @@ end
 function EventEmitter:Fire(name, ...)
     local event = self.events[name]
     if event then
-        local args = {...}
         local ok, err = pcall(function()
-            event:Fire(unpack(args))
+            event:Fire(...)
         end)
         if not ok then
             -- Silent fail for events

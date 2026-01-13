@@ -1,6 +1,5 @@
 -- ============================================================================
--- FORGEHUB - AIMBOT SETTINGS v4.7 (SYNC VERSION)
--- Agora funciona como defaults + funções de sync
+-- FORGEHUB - AIMBOT SETTINGS v4.8 (Com Mouse Method)
 -- ============================================================================
 
 local SettingsDefaults = {
@@ -21,13 +20,16 @@ local SettingsDefaults = {
     AimbotUseKey = "MouseButton2",
     AimbotToggleKey = "Q",
     AimPart = "Head",
-    AimMethod = "Camera",
+    AimMethod = "Camera",  -- "Camera" ou "Mouse"
     SmoothingFactor = 5,
     MaxDistance = 2000,
     IgnoreTeamAimbot = true,
     IgnoreTeam = true,
     VisibleCheck = true,
     MaxLockTime = 1.5,
+    
+    -- Mouse Method Settings
+    MouseSensitivity = 0.003,  -- Sensibilidade para método Mouse
     
     -- FOV
     UseAimbotFOV = true,
@@ -79,7 +81,6 @@ local SettingsDefaults = {
 -- ============================================================================
 local API = {}
 
--- Aplica defaults no Settings global
 function API.ApplyDefaults(globalSettings)
     if not globalSettings then return end
     
@@ -98,7 +99,4 @@ function API.GetDefaults()
     return SettingsDefaults
 end
 
--- ============================================================================
--- EXPORT
--- ============================================================================
 return API

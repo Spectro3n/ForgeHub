@@ -1,7 +1,6 @@
 -- ============================================================================
--- FORGEHUB - AIMBOT LEGIT MODULE v5.0 (NO MouseMoveRel)
--- Versão limpa sem getgenv/MouseMoveRel - Usa apenas Camera manipulation
--- Suporta jogos que usam mouse-lock através de simulação via Camera
+-- FORGEHUB - AIMBOT LEGIT MODULE v5.1 (Camera + Mouse Methods)
+-- Versão com dois métodos de mira: Camera (direto) e Mouse (simulação)
 -- ============================================================================
 
 local AimbotLegit = {
@@ -28,6 +27,8 @@ local AimbotLegit = {
     _mouseAccumX = 0,
     _mouseAccumY = 0,
     _lastMouseUpdate = 0,
+    _mouseVelocityX = 0,
+    _mouseVelocityY = 0,
     
     -- Debug
     _debugMode = false,
@@ -179,6 +180,15 @@ local function EaseInOutQuad(t)
     else
         return 1 - math.pow(-2 * t + 2, 2) / 2
     end
+end
+
+local function EaseOutExpo(t)
+    if t >= 1 then return 1 end
+    return 1 - math.pow(2, -10 * t)
+end
+
+local function EaseOutCubic(t)
+    return 1 - math.pow(1 - t, 3)
 end
 
 -- ============================================================================
@@ -607,7 +617,6 @@ function AimbotLegit:Predict(player, part)
         return basePos
     end
     
-    -- Update prediction history
     local playerId = player.UserId
     self._predHistory[playerId] = predicted
     self._lastPredUpdate[playerId] = tick()
@@ -652,7 +661,8 @@ function AimbotLegit:CalculateAdaptiveSmoothing(data)
 end
 
 -- ============================================================================
--- AIM APPLICATION - CAMERA METHOD (PRIMARY)
+-- AIM APPLICATION - CAMERA METHOD (Rotação Direta)
+-- Usa CFrame.lookAt para rotação suave e direta
 -- ============================================================================
 function AimbotLegit:Method_Camera(targetPos, smoothFactor)
     local success = pcall(function()
@@ -715,22 +725,43 @@ function AimbotLegit:Method_Camera(targetPos, smoothFactor)
 end
 
 -- ============================================================================
--- AIM APPLICATION - MOUSE SIMULATION VIA CAMERA (ALTERNATIVE)
--- Simulates mouse movement by calculating screen-space deltas
--- Works for games that use mouse-lock or first-person mechanics
+-- AIM APPLICATION - MOUSE METHOD (Simulação de Mouse)
+-- Calcula delta na tela e aplica rotação incremental
+-- Mais natural, simula movimento de mouse real
 -- ============================================================================
-function AimbotLegit:Method_MouseSim(targetPos, smoothFactor)
+function AimbotLegit:Method_Mouse(targetPos, smoothFactor)
     local success = pcall(function()
         self._active = true
         
         local cam = GetCamera()
-        if not cam then return end
+        if not cam then return false end
         
         -- Get screen position of target
         local screenPos, onScreen = cam:WorldToViewportPoint(targetPos)
-        if not onScreen then 
-            -- Target off screen - use camera method instead
-            return self:Method_Camera(targetPos, smoothFactor)
+        
+        -- If target is off screen, handle differently
+        if not onScreen then
+            -- Calculate direction to target
+            local camPos = cam.CFrame.Position
+            local dir = (targetPos - camPos).Unit
+            local camLook = cam.CFrame.LookVector
+            
+            -- Calculate angle difference
+            local dot = camLook:Dot(dir)
+            local cross = camLook:Cross(dir)
+            
+            -- Determine rotation direction
+            local rotY = cross.Y > 0 and -0.02 or 0.02
+            local rotX = (dir.Y - camLook.Y) * 0.01
+            
+            -- Apply smoothing
+            rotY = rotY * smoothFactor
+            rotX = rotX * smoothFactor
+            
+            -- Apply rotation
+            local currentCF = cam.CFrame
+            cam.CFrame = currentCF * CFrame.Angles(rotX, rotY, 0)
+            return true
         end
         
         local viewport = cam.ViewportSize
@@ -741,47 +772,86 @@ function AimbotLegit:Method_MouseSim(targetPos, smoothFactor)
         local deltaX = screenPos.X - centerX
         local deltaY = screenPos.Y - centerY
         
-        -- Check deadzone
+        -- Calculate distance to target on screen
         local deltaMagnitude = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+        
+        -- Check deadzone
         local deadzone = Settings.DeadzoneRadius or 2
-        
         if deltaMagnitude < deadzone then
-            return true -- Already on target
+            -- Reset velocity when on target
+            self._mouseVelocityX = 0
+            self._mouseVelocityY = 0
+            return true
         end
         
-        -- Apply smoothing with easing
-        local easedFactor = smoothFactor
+        -- Normalize delta
+        local normalizedX = deltaX / deltaMagnitude
+        local normalizedY = deltaY / deltaMagnitude
+        
+        -- Calculate speed based on distance (faster when far, slower when close)
+        local speedMultiplier = math.clamp(deltaMagnitude / 100, 0.1, 2.0)
+        
+        -- Apply easing based on distance
+        local easedFactor = smoothFactor * speedMultiplier
         if Settings.AimSafety then
-            easedFactor = EaseInOutQuad(smoothFactor) * 0.7
+            -- Use exponential easing for more natural feel
+            local t = math.clamp(deltaMagnitude / 200, 0, 1)
+            easedFactor = EaseOutCubic(t) * smoothFactor * 0.7
         end
         
-        -- Convert screen delta to camera rotation
-        -- This simulates what mouse movement would do
-        local sensitivity = 0.002 -- Base sensitivity multiplier
-        local rotX = -deltaY * sensitivity * easedFactor
-        local rotY = -deltaX * sensitivity * easedFactor
+        -- Sensitivity multiplier (converts screen pixels to rotation)
+        local baseSensitivity = Settings.MouseSensitivity or 0.003
+        local sensitivity = baseSensitivity * easedFactor
         
-        -- Add humanization
+        -- Calculate rotation amounts
+        local rotY = -deltaX * sensitivity  -- Yaw (left/right)
+        local rotX = -deltaY * sensitivity  -- Pitch (up/down)
+        
+        -- Apply velocity smoothing for more natural movement
+        local velocitySmooth = 0.3
+        self._mouseVelocityX = self._mouseVelocityX * (1 - velocitySmooth) + rotX * velocitySmooth
+        self._mouseVelocityY = self._mouseVelocityY * (1 - velocitySmooth) + rotY * velocitySmooth
+        
+        -- Add humanization (micro-corrections)
         if Settings.AimSafety then
-            rotX = AddMicroJitter(rotX, 0.0005)
-            rotY = AddMicroJitter(rotY, 0.0005)
+            -- Add subtle randomness to simulate human hand tremor
+            local jitterIntensity = 0.0003 * (1 + deltaMagnitude / 500)
+            self._mouseVelocityX = AddMicroJitter(self._mouseVelocityX, jitterIntensity)
+            self._mouseVelocityY = AddMicroJitter(self._mouseVelocityY, jitterIntensity)
+            
+            -- Occasional micro-pause (human hesitation)
+            if math.random() < 0.02 then
+                self._mouseVelocityX = self._mouseVelocityX * 0.5
+                self._mouseVelocityY = self._mouseVelocityY * 0.5
+            end
         end
         
         -- Apply rotation to camera
         local currentCF = cam.CFrame
-        local newCF = currentCF * CFrame.Angles(rotX, rotY, 0)
+        local newCF = currentCF * CFrame.Angles(self._mouseVelocityX, self._mouseVelocityY, 0)
         
         -- Clamp vertical rotation to prevent camera flip
-        local _, currentY, _ = currentCF:ToEulerAnglesYXZ()
         local newX, newY, newZ = newCF:ToEulerAnglesYXZ()
-        
-        -- Limit pitch (up/down)
         newX = math.clamp(newX, -math.rad(89), math.rad(89))
         
         cam.CFrame = CFrame.new(currentCF.Position) * CFrame.Angles(newX, newY, newZ)
     end)
     
-    return success
+    if not success then
+        self._consecutiveErrors = (self._consecutiveErrors or 0) + 1
+        
+        if self._consecutiveErrors > self._maxConsecutiveErrors then
+            self:ForceReset()
+            task.delay(0.5, function()
+                self._consecutiveErrors = 0
+            end)
+        end
+        
+        return false
+    end
+    
+    self._consecutiveErrors = 0
+    return true
 end
 
 -- ============================================================================
@@ -820,7 +890,7 @@ function AimbotLegit:ApplyAim(targetPos, smoothing)
     
     -- Choose method
     if method == "Mouse" then
-        return self:Method_MouseSim(targetPos, smoothFactor)
+        return self:Method_Mouse(targetPos, smoothFactor)
     else
         -- Default: Camera method
         return self:Method_Camera(targetPos, smoothFactor)
@@ -833,6 +903,8 @@ end
 function AimbotLegit:Deactivate()
     self.Active = false
     self._active = false
+    self._mouseVelocityX = 0
+    self._mouseVelocityY = 0
     Lock:Clear()
     
     if self._holdUntil and tick() >= self._holdUntil then
@@ -923,6 +995,8 @@ function AimbotLegit:Toggle(enabled)
         self._holdUntil = nil
         Lock:Clear()
         self._active = false
+        self._mouseVelocityX = 0
+        self._mouseVelocityY = 0
     end
 end
 
@@ -937,6 +1011,8 @@ function AimbotLegit:ForceReset()
     self._consecutiveErrors = 0
     self._mouseAccumX = 0
     self._mouseAccumY = 0
+    self._mouseVelocityX = 0
+    self._mouseVelocityY = 0
     Lock:Clear()
     self._predHistory = {}
     self._lastPredUpdate = {}
@@ -957,6 +1033,7 @@ function AimbotLegit:GetDebugInfo()
         currentTarget = Lock.Current and Lock.Current.Name or nil,
         consecutiveErrors = self._consecutiveErrors,
         aimMethod = Settings and Settings.AimMethod or "Camera",
+        mouseVelocity = {x = self._mouseVelocityX, y = self._mouseVelocityY},
     }
 end
 
@@ -969,7 +1046,7 @@ function AimbotLegit:Initialize(deps)
         return self 
     end
     
-    print("[AimbotLegit] Initializing v5.0 (No MouseMoveRel)...")
+    print("[AimbotLegit] Initializing v5.1 (Camera + Mouse Methods)...")
     
     if not deps then
         warn("[AimbotLegit] No dependencies provided!")
@@ -1001,17 +1078,24 @@ function AimbotLegit:Initialize(deps)
         Settings.AimMethod = "Camera"
     end
     
-    -- Remove MouseMoveRel option from AimMethod if set
+    if Settings.MouseSensitivity == nil then
+        Settings.MouseSensitivity = 0.003
+    end
+    
+    -- Handle legacy MouseMoveRel setting
     if Settings.AimMethod == "MouseMoveRel" then
-        Settings.AimMethod = "Camera"
-        print("[AimbotLegit] MouseMoveRel não suportado, usando Camera")
+        Settings.AimMethod = "Mouse"
+        print("[AimbotLegit] Convertido MouseMoveRel para Mouse")
     end
     
     self._init = true
     self._consecutiveErrors = 0
+    self._mouseVelocityX = 0
+    self._mouseVelocityY = 0
     
     print("[AimbotLegit] ✓ Initialized successfully")
     print("[AimbotLegit] AimMethod:", Settings.AimMethod)
+    print("[AimbotLegit] Métodos disponíveis: Camera, Mouse")
     print("[AimbotLegit] Utils:", Utils and "Loaded" or "Using fallbacks")
     print("[AimbotLegit] Camera:", Camera and "OK" or "nil")
     print("[AimbotLegit] AimbotToggleOnly:", Settings.AimbotToggleOnly and "ON" or "OFF")

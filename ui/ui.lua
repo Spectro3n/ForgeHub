@@ -343,6 +343,47 @@ function UI:CreateInterface()
         end
     })
 
+    MainTab:CreateDropdown({
+        Name = "🎯 Método de Mira",
+        Options = {"Camera", "Mouse"},
+        CurrentOption = {Settings.AimMethod or "Camera"},
+        Callback = function(Option)
+            local selected = HandleDropdown(Option)
+            if Core.Aimbot and Core.Aimbot.SetAimMethod then
+                Core.Aimbot.SetAimMethod(selected)
+            else
+                Settings.AimMethod = selected
+            end
+        end,
+    })
+
+    MainTab:CreateSlider({
+        Name = "🎚️ Suavização (Smoothing)",
+        Range = {0, 20},
+        Increment = 0.5,
+        Suffix = "",
+        CurrentValue = Settings.SmoothingFactor or 5,
+        Callback = function(Value)
+            if Core.Aimbot and Core.Aimbot.SetSmoothing then
+                Core.Aimbot.SetSmoothing(Value)
+            else
+                Settings.SmoothingFactor = Value
+            end
+        end,
+    })
+
+    MainTab:CreateSlider({
+        Name = "🎚️ Sensibilidade Mouse",
+        Range = {1, 10},
+        Increment = 0.5,
+        Suffix = "",
+        CurrentValue = (Settings.MouseSensitivity or 0.003) * 1000,
+        Callback = function(Value)
+            Settings.MouseSensitivity = Value / 1000
+        end,
+    })
+    
+
     MainTab:CreateToggle({
         Name = "🔄 Modo Toggle-Only (sem segurar)",
         CurrentValue = Settings.AimbotToggleOnly or false,
@@ -354,17 +395,6 @@ function UI:CreateInterface()
                 Notify("Aimbot", "Normal: Precisa segurar botão para mirar")
             end
         end
-    })
-
-    MainTab:CreateParagraph({
-        Title = "ℹ️ Modos de Ativação",
-        Content = "Toggle-Only OFF: Precisa ativar + segurar botão\nToggle-Only ON: Só precisa ativar (automático)"
-    })
-
-    -- REMOVIDO: Dropdown de AimMethod (agora só usa Camera)
-    MainTab:CreateParagraph({
-        Title = "🎮 Método de Aim",
-        Content = "Usando: Camera Method (mais seguro e compatível)"
     })
 
     MainTab:CreateDropdown({
