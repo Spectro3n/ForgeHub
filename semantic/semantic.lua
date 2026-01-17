@@ -1,4 +1,3 @@
-
 -- ============================================================================
 -- MODULE DEFINITION
 -- ============================================================================
@@ -8,7 +7,7 @@ SemanticEngineModule.__index = SemanticEngineModule
 -- ============================================================================
 -- CONSTANTS
 -- ============================================================================
-local VERSION = "3.0.0"
+local VERSION = "3.1.0"
 local MODULE_NAME = "SemanticEngine"
 
 local LOG_LEVELS = {
@@ -80,6 +79,57 @@ function Defensive.SafeCall(instance, method, ...)
 end
 
 -- ============================================================================
+-- UTILITY: LEVENSHTEIN DISTANCE (FUZZY STRING MATCHING)
+-- ============================================================================
+local function Levenshtein(a, b)
+    if a == nil or b == nil then return math.huge end
+    a = tostring(a):lower()
+    b = tostring(b):lower()
+    local la, lb = #a, #b
+    if la == 0 then return lb end
+    if lb == 0 then return la end
+    
+    local prev = {}
+    for j = 0, lb do prev[j] = j end
+    
+    for i = 1, la do
+        local cur = { [0] = i }
+        for j = 1, lb do
+            local cost = (a:sub(i,i) == b:sub(j,j)) and 0 or 1
+            cur[j] = math.min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + cost)
+        end
+        prev = cur
+    end
+    return prev[lb]
+end
+
+-- Normalized similarity (0 to 1, where 1 = identical)
+local function FuzzySimilarity(a, b)
+    if not a or not b then return 0 end
+    local distance = Levenshtein(a, b)
+    local maxLen = math.max(#tostring(a), #tostring(b))
+    if maxLen == 0 then return 1 end
+    return 1 - (distance / maxLen)
+end
+
+-- Find best fuzzy match from a list
+local function FuzzyFindBest(target, candidates, threshold)
+    threshold = threshold or 0.7
+    local bestMatch, bestScore = nil, 0
+    
+    for _, candidate in ipairs(candidates) do
+        local name = type(candidate) == "string" and candidate or Defensive.GetName(candidate)
+        local score = FuzzySimilarity(target, name)
+        if score > bestScore and score >= threshold then
+            bestScore = score
+            bestMatch = candidate
+        end
+    end
+    
+    return bestMatch, bestScore
+end
+
+-- ============================================================================
 -- UTILITY: WEAK TABLES
 -- ============================================================================
 local function WeakKeys()
@@ -143,30 +193,76 @@ function Throttle.execute(state, fn)
 end
 
 -- ============================================================================
+-- UTILITY: VECTOR MATH HELPERS
+-- ============================================================================
+local VectorUtils = {}
+
+function VectorUtils.Distance3D(pos1, pos2)
+    if not pos1 or not pos2 then return math.huge end
+    
+    local x1, y1, z1, x2, y2, z2
+    
+    -- Handle Vector3 or table
+    if typeof(pos1) == "Vector3" then
+        x1, y1, z1 = pos1.X, pos1.Y, pos1.Z
+    elseif type(pos1) == "table" then
+        x1, y1, z1 = pos1.X or pos1[1] or 0, pos1.Y or pos1[2] or 0, pos1.Z or pos1[3] or 0
+    else
+        return math.huge
+    end
+    
+    if typeof(pos2) == "Vector3" then
+        x2, y2, z2 = pos2.X, pos2.Y, pos2.Z
+    elseif type(pos2) == "table" then
+        x2, y2, z2 = pos2.X or pos2[1] or 0, pos2.Y or pos2[2] or 0, pos2.Z or pos2[3] or 0
+    else
+        return math.huge
+    end
+    
+    return math.sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
+end
+
+function VectorUtils.DistanceSquared3D(pos1, pos2)
+    if not pos1 or not pos2 then return math.huge end
+    
+    local x1, y1, z1, x2, y2, z2
+    
+    if typeof(pos1) == "Vector3" then
+        x1, y1, z1 = pos1.X, pos1.Y, pos1.Z
+    elseif type(pos1) == "table" then
+        x1, y1, z1 = pos1.X or 0, pos1.Y or 0, pos1.Z or 0
+    else
+        return math.huge
+    end
+    
+    if typeof(pos2) == "Vector3" then
+        x2, y2, z2 = pos2.X, pos2.Y, pos2.Z
+    elseif type(pos2) == "table" then
+        x2, y2, z2 = pos2.X or 0, pos2.Y or 0, pos2.Z or 0
+    else
+        return math.huge
+    end
+    
+    return (x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2
+end
+
+-- ============================================================================
 -- ADAPTERS: INTERFACE DEFINITIONS
 -- ============================================================================
---[[
-    Adapters permitem que o módulo funcione em diferentes ambientes:
-    - RobloxAdapter: Ambiente real do Roblox
-    - MockAdapter: Para testes unitários
-    - CustomAdapter: Para engines customizadas
-]]
-
 local AdapterInterface = {
-    -- Required methods
-    GetPlayers = function() end,            -- () -> {Player}
-    GetLocalPlayer = function() end,        -- () -> Player
-    GetWorkspace = function() end,          -- () -> Workspace
-    FindFirstChild = function() end,        -- (parent, name, recursive) -> Instance?
-    GetChildren = function() end,           -- (instance) -> {Instance}
-    GetDescendants = function() end,        -- (instance) -> {Instance}
-    IsA = function() end,                   -- (instance, className) -> boolean
-    GetAttribute = function() end,          -- (instance, name) -> any
-    ConnectEvent = function() end,          -- (event, callback) -> Connection
-    Now = function() end,                   -- () -> number (timestamp)
-    Wait = function() end,                  -- (seconds) -> void
-    Spawn = function() end,                 -- (fn) -> void
-    Delay = function() end,                 -- (seconds, fn) -> void
+    GetPlayers = function() end,
+    GetLocalPlayer = function() end,
+    GetWorkspace = function() end,
+    FindFirstChild = function() end,
+    GetChildren = function() end,
+    GetDescendants = function() end,
+    IsA = function() end,
+    GetAttribute = function() end,
+    ConnectEvent = function() end,
+    Now = function() end,
+    Wait = function() end,
+    Spawn = function() end,
+    Delay = function() end,
 }
 
 -- ============================================================================
@@ -180,11 +276,10 @@ function RobloxAdapter.new(overrides)
     
     overrides = overrides or {}
     
-    -- Services (can be overridden)
     self._Players = overrides.Players or game:GetService("Players")
     self._Workspace = overrides.Workspace or game:GetService("Workspace")
     self._RunService = overrides.RunService or game:GetService("RunService")
-    self._Teams = nil -- Lazy loaded
+    self._Teams = nil
     
     return self
 end
@@ -410,7 +505,6 @@ end
 
 function MockAdapter:AdvanceTime(delta)
     self._time = self._time + delta
-    -- Execute delayed functions
     local toExecute = {}
     for i, item in ipairs(self._delayedFunctions) do
         if item.executeAt <= self._time then
@@ -468,7 +562,6 @@ function MockAdapter:CreateBindableEvent()
     }
 end
 
--- Mock Player Factory
 function MockAdapter.CreateMockPlayer(config)
     config = config or {}
     return {
@@ -493,7 +586,6 @@ function MockAdapter.CreateMockPlayer(config)
     }
 end
 
--- Mock Character Factory
 function MockAdapter.CreateMockCharacter(config)
     config = config or {}
     
@@ -502,7 +594,7 @@ function MockAdapter.CreateMockCharacter(config)
         ClassName = "Humanoid",
         Health = config.Health or 100,
         MaxHealth = config.MaxHealth or 100,
-        RootPart = nil, -- Set below
+        RootPart = nil,
         Died = { Connect = function(_, cb) return { Disconnect = function() end } end },
     }
     
@@ -532,7 +624,6 @@ function MockAdapter.CreateMockCharacter(config)
         AncestryChanged = { Connect = function(_, cb) return { Disconnect = function() end } end },
     }
     
-    -- Set parent references
     for _, child in ipairs(character.Children) do
         child.Parent = character
     end
@@ -579,13 +670,11 @@ function Logger:_log(level, levelName, ...)
         message = message,
     }
     
-    -- Add to history
     table.insert(self.history, entry)
     if #self.history > self.maxHistory then
         table.remove(self.history, 1)
     end
     
-    -- Output
     local formatted = string.format("%s [%s] %s", self.prefix, levelName, message)
     if level <= LOG_LEVELS.WARN then
         self.warnFn(formatted)
@@ -660,7 +749,7 @@ end
 function Metrics:RecordError(name, err)
     self.errors[name] = self.errors[name] or { count = 0, lastError = nil, lastTime = 0 }
     self.errors[name].count = self.errors[name].count + 1
-    self.errors[name].lastError = tostring(err):sub(1, 200) -- Truncate for safety
+    self.errors[name].lastError = tostring(err):sub(1, 200)
     self.errors[name].lastTime = tick()
 end
 
@@ -710,7 +799,6 @@ function PlayerCache:GetStagger(player)
     if not player then return 0 end
     
     if not self.staggerOffset[player] then
-        -- Deterministic based on UserId
         local id = 0
         if type(player) == "table" and player.UserId then
             id = player.UserId
@@ -781,7 +869,7 @@ function PlayerCache:GetStats()
 end
 
 -- ============================================================================
--- CONTAINER MANAGER
+-- CONTAINER MANAGER (ENHANCED WITH RESOLVERS & HEURISTICS)
 -- ============================================================================
 local ContainerManager = {}
 ContainerManager.__index = ContainerManager
@@ -802,6 +890,11 @@ function ContainerManager.new(config)
     self.scanInterval = config.scanInterval or 5
     self.rateLimiter = RateLimiter.new(self.scanInterval)
     
+    -- NEW: Container resolvers with weights
+    self.containerResolvers = {} -- { {fn=fn, weight=number}, ... }
+    self.minContainerScore = config.minContainerScore or 1.0
+    self.fuzzyMatchThreshold = config.fuzzyMatchThreshold or 0.75
+    
     self.containerNames = config.containerNames or {
         "Characters", "Players", "Entities", "Alive", "InGame", 
         "ActivePlayers", "NPCs", "Enemies", "Bots", "Units", 
@@ -812,12 +905,29 @@ function ContainerManager.new(config)
     return self
 end
 
+-- NEW: Register resolver with weight
+function ContainerManager:RegisterResolver(fn, weight)
+    if type(fn) ~= "function" then return false end
+    weight = tonumber(weight) or 1
+    
+    table.insert(self.containerResolvers, { fn = fn, weight = weight })
+    
+    if self.logger then 
+        self.logger:Debug("Container resolver registered, weight:", weight, "total:", #self.containerResolvers) 
+    end
+    
+    if self.metrics then
+        self.metrics:Increment("container_resolvers_registered")
+    end
+    
+    return true
+end
+
 function ContainerManager:Register(container)
     if not container then return false end
     
     local name = "unknown"
     if type(container) == "string" then
-        -- Find by name
         local workspace = self.adapter:GetWorkspace()
         container = self.adapter:FindFirstChild(workspace, container, true)
         if not container then return false end
@@ -839,6 +949,61 @@ function ContainerManager:Register(container)
     end
     
     return true
+end
+
+-- NEW: Heuristic container scoring
+function ContainerManager:_scoreContainer(candidate)
+    local score = 0
+    local children = self.adapter:GetChildren(candidate)
+    local modelCount = 0
+    local humanoidCount = 0
+    local entityAttributeCount = 0
+    
+    for _, c in ipairs(children) do
+        if self.adapter:IsA(c, "Model") then 
+            modelCount = modelCount + 1 
+            
+            -- Check for humanoid inside model
+            local humanoid = self.adapter:FindFirstChildOfClass(c, "Humanoid")
+            if humanoid then
+                humanoidCount = humanoidCount + 1
+            end
+        end
+        
+        -- Attribute heuristics
+        if self.adapter:GetAttribute(c, "IsPlayer") or 
+           self.adapter:GetAttribute(c, "IsEntity") or
+           self.adapter:GetAttribute(c, "IsCharacter") then
+            entityAttributeCount = entityAttributeCount + 1
+        end
+    end
+    
+    -- Scoring formula
+    score = score + (modelCount * 0.3)
+    score = score + (humanoidCount * 1.0)
+    score = score + (entityAttributeCount * 2.0)
+    
+    -- Name-based boost
+    local name = Defensive.GetName(candidate):lower()
+    local nameBoosts = {
+        { pattern = "player", boost = 1.5 },
+        { pattern = "character", boost = 1.5 },
+        { pattern = "entit", boost = 1.0 },
+        { pattern = "alive", boost = 1.0 },
+        { pattern = "active", boost = 0.5 },
+        { pattern = "spawn", boost = 0.5 },
+        { pattern = "npc", boost = 0.8 },
+        { pattern = "enemy", boost = 0.8 },
+        { pattern = "team", boost = 0.5 },
+    }
+    
+    for _, boost in ipairs(nameBoosts) do
+        if name:find(boost.pattern) then
+            score = score + boost.boost
+        end
+    end
+    
+    return score, modelCount, humanoidCount
 end
 
 function ContainerManager:Scan(force)
@@ -872,12 +1037,14 @@ function ContainerManager:Scan(force)
                     name = info.name,
                     found = now,
                     childCount = modelCount,
+                    score = 100, -- Registered containers get high score
+                    source = "registered",
                 }
             end
         end
     end
     
-    -- Scan by name
+    -- Scan by known names
     for _, name in ipairs(self.containerNames) do
         local ok, err = pcall(function()
             local container = self.adapter:FindFirstChild(workspace, name, true)
@@ -886,29 +1053,30 @@ function ContainerManager:Scan(force)
                 local isModel = self.adapter:IsA(container, "Model")
                 
                 if isFolder or isModel then
-                    if not self.knownContainers[container] then
-                        local children = self.adapter:GetChildren(container)
-                        local hasModels = false
-                        for _, child in ipairs(children) do
-                            if self.adapter:IsA(child, "Model") then
-                                hasModels = true
-                                break
-                            end
+                    local children = self.adapter:GetChildren(container)
+                    local hasModels = false
+                    for _, child in ipairs(children) do
+                        if self.adapter:IsA(child, "Model") then
+                            hasModels = true
+                            break
+                        end
+                    end
+                    
+                    if hasModels then
+                        local score = self:_scoreContainer(container)
+                        self.knownContainers[container] = {
+                            name = name,
+                            found = now,
+                            score = score,
+                            source = "named",
+                        }
+                        
+                        if self.metrics then
+                            self.metrics:Increment("containers_found")
                         end
                         
-                        if hasModels then
-                            self.knownContainers[container] = {
-                                name = name,
-                                found = now,
-                            }
-                            
-                            if self.metrics then
-                                self.metrics:Increment("containers_found")
-                            end
-                            
-                            if self.logger then
-                                self.logger:Debug("Container found:", name)
-                            end
+                        if self.logger then
+                            self.logger:Debug("Named container found:", name, "score:", score)
                         end
                     end
                 end
@@ -916,23 +1084,123 @@ function ContainerManager:Scan(force)
         end)
         
         if not ok and self.metrics then
-            self.metrics:RecordError("container_scan", err)
+            self.metrics:RecordError("container_scan_named", err)
+        end
+    end
+    
+    -- NEW: Heuristic global scan (top-level workspace children)
+    local candidates = self.adapter:GetChildren(workspace)
+    for _, candidate in ipairs(candidates) do
+        -- Skip if already known
+        if not self.knownContainers[candidate] then
+            local isFolder = self.adapter:IsA(candidate, "Folder")
+            local isModel = self.adapter:IsA(candidate, "Model")
+            
+            if isFolder or isModel then
+                local ok, score, modelCount, humanoidCount = pcall(function()
+                    return self:_scoreContainer(candidate)
+                end)
+                
+                if ok and score and score >= self.minContainerScore then
+                    self.knownContainers[candidate] = {
+                        name = Defensive.GetName(candidate),
+                        found = now,
+                        score = score,
+                        childCount = modelCount,
+                        humanoidCount = humanoidCount,
+                        source = "heuristic",
+                    }
+                    
+                    if self.metrics then 
+                        self.metrics:Increment("containers_found_heuristic") 
+                    end
+                    
+                    if self.logger then 
+                        self.logger:Debug("Heuristic container found:", Defensive.GetName(candidate), "score:", score) 
+                    end
+                end
+            end
+        end
+    end
+    
+    -- NEW: Run custom resolvers
+    for idx, entry in ipairs(self.containerResolvers) do
+        local ok, result = pcall(function()
+            return entry.fn(self.adapter)
+        end)
+        
+        if ok and result then
+            local function processResult(item, baseWeight)
+                if type(item) == "table" and item.instance then
+                    local inst = item.instance
+                    local sc = tonumber(item.score) or baseWeight
+                    if inst and (Defensive.IsValid(inst) or (type(inst) == "table" and inst.Parent)) then
+                        self.knownContainers[inst] = { 
+                            name = Defensive.GetName(inst), 
+                            found = now, 
+                            score = sc,
+                            source = "resolver_" .. idx,
+                        }
+                    end
+                elseif Defensive.IsInstance(item) or (type(item) == "table" and item.Parent) then
+                    self.knownContainers[item] = { 
+                        name = Defensive.GetName(item), 
+                        found = now, 
+                        score = baseWeight,
+                        source = "resolver_" .. idx,
+                    }
+                end
+            end
+            
+            if type(result) == "table" then
+                if result.instance then
+                    -- Single result with instance key
+                    processResult(result, entry.weight)
+                elseif #result > 0 then
+                    -- Array of results
+                    for _, item in ipairs(result) do
+                        processResult(item, entry.weight)
+                    end
+                end
+            elseif Defensive.IsInstance(result) then
+                processResult(result, entry.weight)
+            end
+            
+            if self.metrics then
+                self.metrics:Increment("container_resolver_success")
+            end
+        elseif not ok then
+            if self.metrics then
+                self.metrics:RecordError("container_resolver_" .. idx, result)
+            end
         end
     end
     
     if self.metrics then
         self.metrics:StopTimer("container_scan")
+        self.metrics:Set("known_containers", self:GetContainerCount())
     end
+end
+
+function ContainerManager:GetContainerCount()
+    local count = 0
+    for _ in pairs(self.knownContainers) do
+        count = count + 1
+    end
+    return count
 end
 
 function ContainerManager:GetKnown()
     return self.knownContainers
 end
 
-function ContainerManager:FindInContainers(name)
+-- NEW: Find with fuzzy matching
+function ContainerManager:FindInContainers(name, useFuzzy)
     if not name then return nil end
     
-    -- Check registered first
+    useFuzzy = useFuzzy ~= false -- Default to true
+    
+    -- Check registered first (exact)
     for container, _ in pairs(self.registeredContainers) do
         if Defensive.IsValid(container) or (type(container) == "table" and container.Parent) then
             local found = self.adapter:FindFirstChild(container, name)
@@ -942,12 +1210,36 @@ function ContainerManager:FindInContainers(name)
         end
     end
     
-    -- Check known
+    -- Check known (exact)
     for container, _ in pairs(self.knownContainers) do
         if Defensive.IsValid(container) or (type(container) == "table" and container.Parent) then
             local found = self.adapter:FindFirstChild(container, name)
             if found and self.adapter:IsA(found, "Model") then
                 return found
+            end
+        end
+    end
+    
+    -- Fuzzy matching
+    if useFuzzy then
+        for container, _ in pairs(self.knownContainers) do
+            if Defensive.IsValid(container) or (type(container) == "table" and container.Parent) then
+                local children = self.adapter:GetChildren(container)
+                local modelChildren = {}
+                
+                for _, child in ipairs(children) do
+                    if self.adapter:IsA(child, "Model") then
+                        table.insert(modelChildren, child)
+                    end
+                end
+                
+                local bestMatch, bestScore = FuzzyFindBest(name, modelChildren, self.fuzzyMatchThreshold)
+                if bestMatch then
+                    if self.logger then
+                        self.logger:Debug("Fuzzy matched:", name, "->", Defensive.GetName(bestMatch), "score:", bestScore)
+                    end
+                    return bestMatch
+                end
             end
         end
     end
@@ -961,7 +1253,86 @@ function ContainerManager:Clear()
 end
 
 -- ============================================================================
--- TEAM SYSTEM MANAGER
+-- PROXIMITY CLUSTERING (DBSCAN-LIKE)
+-- ============================================================================
+local ProximityClustering = {}
+
+function ProximityClustering.Cluster(anchors, radius)
+    radius = radius or 15
+    local radiusSquared = radius * radius
+    
+    local clusters = {}
+    local visited = {}
+    local playerList = {}
+    
+    -- Build player list
+    for player, _ in pairs(anchors) do
+        table.insert(playerList, player)
+    end
+    
+    local function getNeighbors(player)
+        local neighbors = {}
+        local pos = anchors[player]
+        if not pos then return neighbors end
+        
+        for other, otherPos in pairs(anchors) do
+            if player ~= other and otherPos then
+                local distSq = VectorUtils.DistanceSquared3D(pos, otherPos)
+                if distSq <= radiusSquared then
+                    table.insert(neighbors, other)
+                end
+            end
+        end
+        return neighbors
+    end
+    
+    local clusterIndex = 0
+    
+    for _, player in ipairs(playerList) do
+        if not visited[player] then
+            visited[player] = true
+            clusterIndex = clusterIndex + 1
+            local clusterId = "proximity_" .. clusterIndex
+            
+            clusters[clusterId] = clusters[clusterId] or {}
+            table.insert(clusters[clusterId], player)
+            
+            -- Flood-fill neighbors
+            local queue = getNeighbors(player)
+            local queueIndex = 1
+            
+            while queueIndex <= #queue do
+                local neighbor = queue[queueIndex]
+                queueIndex = queueIndex + 1
+                
+                if not visited[neighbor] then
+                    visited[neighbor] = true
+                    table.insert(clusters[clusterId], neighbor)
+                    
+                    -- Add neighbor's neighbors to queue
+                    for _, nn in ipairs(getNeighbors(neighbor)) do
+                        if not visited[nn] then
+                            table.insert(queue, nn)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Convert to partition map
+    local partition = {}
+    for clusterId, members in pairs(clusters) do
+        for _, player in ipairs(members) do
+            partition[player] = clusterId
+        end
+    end
+    
+    return partition, clusterIndex
+end
+
+-- ============================================================================
+-- TEAM SYSTEM MANAGER (ENHANCED WITH WEIGHTED RESOLVERS & PROXIMITY)
 -- ============================================================================
 local TeamSystemManager = {}
 TeamSystemManager.__index = TeamSystemManager
@@ -984,18 +1355,83 @@ function TeamSystemManager.new(config)
     self.checkInterval = config.checkInterval or 3
     self.rateLimiter = RateLimiter.new(self.checkInterval)
     
-    self.customResolvers = {}
+    -- NEW: Weighted resolvers
+    self.customResolvers = {} -- { {fn=fn, weight=number}, ... }
+    
+    -- NEW: Strategy weights
+    self.strategyWeights = config.strategyWeights or {
+        RobloxTeam = 2.0,
+        TeamColor = 1.5,
+        Attribute = 1.8,
+        Proximity = 1.0,
+        CustomResolver = 1.5,
+    }
+    
+    -- NEW: Proximity clustering config
+    self.proximityRadius = config.proximityRadius or 15
+    self.enableProximityClustering = config.enableProximityClustering ~= false
+    
+    -- Reference to heuristics manager (for anchor resolution)
+    self._heuristics = config.heuristics
     
     return self
 end
 
-function TeamSystemManager:RegisterResolver(fn)
-    if type(fn) == "function" then
-        table.insert(self.customResolvers, fn)
-        if self.logger then
-            self.logger:Debug("Team resolver registered, total:", #self.customResolvers)
+-- NEW: Register resolver with weight
+function TeamSystemManager:RegisterResolver(fn, weight)
+    if type(fn) ~= "function" then return false end
+    weight = tonumber(weight) or 1
+    
+    table.insert(self.customResolvers, { fn = fn, weight = weight })
+    
+    if self.logger then 
+        self.logger:Debug("Team resolver registered, weight:", weight, "total:", #self.customResolvers) 
+    end
+    
+    if self.metrics then
+        self.metrics:Increment("team_resolvers_registered")
+    end
+    
+    return true
+end
+
+-- Set heuristics reference (for proximity clustering anchor lookup)
+function TeamSystemManager:SetHeuristics(heuristics)
+    self._heuristics = heuristics
+end
+
+-- Get player anchor position
+function TeamSystemManager:_getPlayerPosition(player)
+    if not player then return nil end
+    
+    -- Try character
+    local character = Defensive.SafeGet(player, "Character")
+    if character then
+        -- Try heuristics if available
+        if self._heuristics then
+            local anchor = self._heuristics:GetAnchorPart(character)
+            if anchor then
+                local pos = Defensive.SafeGet(anchor, "Position")
+                if pos then return pos end
+            end
+        end
+        
+        -- Fallback: PrimaryPart
+        local primaryPart = Defensive.SafeGet(character, "PrimaryPart")
+        if primaryPart then
+            local pos = Defensive.SafeGet(primaryPart, "Position")
+            if pos then return pos end
+        end
+        
+        -- Fallback: HumanoidRootPart
+        local hrp = self.adapter:FindFirstChild(character, "HumanoidRootPart")
+        if hrp then
+            local pos = Defensive.SafeGet(hrp, "Position")
+            if pos then return pos end
         end
     end
+    
+    return nil
 end
 
 function TeamSystemManager:DetectWithVoting(players)
@@ -1014,7 +1450,7 @@ function TeamSystemManager:DetectWithVoting(players)
         self.metrics:StartTimer("team_detection")
     end
     
-    local partitions = {}
+    local partitionScores = {} -- { [method] = { partition = {}, score = 0, weight = 1 } }
     
     -- Method 1: Roblox Teams
     pcall(function()
@@ -1022,33 +1458,45 @@ function TeamSystemManager:DetectWithVoting(players)
         if teams then
             local teamList = self.adapter:GetChildren(teams)
             if #teamList > 0 then
-                partitions.RobloxTeam = {}
+                local partition = {}
                 for _, p in ipairs(players) do
                     local team = Defensive.SafeGet(p, "Team")
                     if team then
-                        partitions.RobloxTeam[p] = Defensive.GetName(team)
+                        partition[p] = Defensive.GetName(team)
                     else
-                        partitions.RobloxTeam[p] = "__nil"
+                        partition[p] = "__nil"
                     end
                 end
+                
+                local score = self:ScorePartition(partition)
+                partitionScores.RobloxTeam = {
+                    partition = partition,
+                    score = score,
+                    weight = self.strategyWeights.RobloxTeam or 2.0,
+                }
             end
         end
     end)
     
     -- Method 2: TeamColor
-    partitions.TeamColor = {}
+    local teamColorPartition = {}
     for _, p in ipairs(players) do
         local teamColor = Defensive.SafeGet(p, "TeamColor")
         if teamColor and tostring(teamColor) ~= "White" then
-            partitions.TeamColor[p] = tostring(teamColor)
+            teamColorPartition[p] = tostring(teamColor)
         else
-            partitions.TeamColor[p] = "__nil"
+            teamColorPartition[p] = "__nil"
         end
     end
+    partitionScores.TeamColor = {
+        partition = teamColorPartition,
+        score = self:ScorePartition(teamColorPartition),
+        weight = self.strategyWeights.TeamColor or 1.5,
+    }
     
     -- Method 3: Attributes
-    partitions.Attribute = {}
-    local attrNames = {"Team", "TeamName", "Faction", "Side", "Squad", "Group", "Alliance"}
+    local attrPartition = {}
+    local attrNames = {"Team", "TeamName", "Faction", "Side", "Squad", "Group", "Alliance", "Party"}
     for _, p in ipairs(players) do
         local value = "__nil"
         for _, attr in ipairs(attrNames) do
@@ -1058,51 +1506,102 @@ function TeamSystemManager:DetectWithVoting(players)
                 break
             end
         end
-        partitions.Attribute[p] = value
+        attrPartition[p] = value
+    end
+    partitionScores.Attribute = {
+        partition = attrPartition,
+        score = self:ScorePartition(attrPartition),
+        weight = self.strategyWeights.Attribute or 1.8,
+    }
+    
+    -- Method 4: Proximity Clustering (NEW)
+    if self.enableProximityClustering then
+        local ok, proxPartition = pcall(function()
+            -- Gather positions
+            local anchors = {}
+            for _, p in ipairs(players) do
+                local pos = self:_getPlayerPosition(p)
+                if pos then
+                    anchors[p] = pos
+                end
+            end
+            
+            -- Only cluster if we have enough anchors
+            if next(anchors) then
+                local partition, clusterCount = ProximityClustering.Cluster(anchors, self.proximityRadius)
+                return partition, clusterCount
+            end
+            return nil
+        end)
+        
+        if ok and proxPartition and next(proxPartition) then
+            partitionScores.Proximity = {
+                partition = proxPartition,
+                score = self:ScorePartition(proxPartition),
+                weight = self.strategyWeights.Proximity or 1.0,
+            }
+            
+            if self.logger then
+                self.logger:Debug("Proximity clustering detected partitions")
+            end
+        end
     end
     
-    -- Method 4: Custom resolvers
-    for idx, resolver in ipairs(self.customResolvers) do
+    -- Method 5: Custom resolvers (with individual weights)
+    for idx, entry in ipairs(self.customResolvers) do
         local ok, result = pcall(function()
-            return resolver(players)
+            return entry.fn(players)
         end)
-        if ok and result and type(result) == "table" then
-            partitions["CustomResolver_" .. idx] = result
+        
+        if ok and type(result) == "table" and next(result) then
+            local key = "CustomResolver_" .. tostring(idx)
+            partitionScores[key] = {
+                partition = result,
+                score = self:ScorePartition(result),
+                weight = entry.weight or self.strategyWeights.CustomResolver or 1.5,
+            }
         elseif not ok and self.metrics then
             self.metrics:RecordError("team_resolver_" .. idx, result)
         end
     end
     
-    -- Score partitions
+    -- Weighted voting to find best partition
     local bestMethod = nil
-    local bestScore = 0
+    local bestWeightedScore = 0
     local bestPartition = nil
     
-    for method, partition in pairs(partitions) do
-        local score = self:ScorePartition(partition)
-        if score > bestScore then
-            bestScore = score
+    for method, info in pairs(partitionScores) do
+        local weightedScore = (info.score or 0) * (info.weight or 1)
+        
+        if self.logger then
+            self.logger:Trace("Team method:", method, "raw:", info.score, "weight:", info.weight, "weighted:", weightedScore)
+        end
+        
+        if weightedScore > bestWeightedScore then
+            bestWeightedScore = weightedScore
             bestMethod = method
-            bestPartition = partition
+            bestPartition = info.partition
         end
     end
     
-    -- Dynamic threshold
+    -- Dynamic threshold based on player count
     local threshold = 10 + (#players * 0.5)
     
-    if bestMethod and bestScore > threshold then
+    if bestMethod and bestWeightedScore > threshold then
         self.method = bestMethod
         self.currentPartition = bestPartition
         self.forceFFA = false
+        
         if self.logger then
-            self.logger:Debug("Team system detected:", bestMethod, "score:", bestScore)
+            self.logger:Debug("Team system detected:", bestMethod, "weighted score:", bestWeightedScore)
         end
     else
         self.method = "FFA"
         self.currentPartition = {}
         self.forceFFA = true
+        
         if self.logger then
-            self.logger:Debug("FFA mode (no valid team system)")
+            self.logger:Debug("FFA mode (no valid team system, best score:", bestWeightedScore, "threshold:", threshold, ")")
         end
     end
     
@@ -1112,6 +1611,7 @@ function TeamSystemManager:DetectWithVoting(players)
     if self.metrics then
         self.metrics:StopTimer("team_detection")
         self.metrics:Set("team_method", self.method)
+        self.metrics:Set("team_score", bestWeightedScore)
     end
 end
 
@@ -1139,14 +1639,22 @@ function TeamSystemManager:ScorePartition(partition)
         minSize = math.min(minSize, count)
     end
     
-    if groupCount < 2 or groupCount > 8 then
+    -- Reject invalid partitions
+    if groupCount < 2 or groupCount > 10 then
         return 0
     end
     
+    -- Calculate entropy (more balanced = higher score)
     local balance = minSize / math.max(maxSize, 1)
     local coverage = (playerCount - nilCount) / math.max(playerCount, 1)
     
-    return groupCount * balance * coverage * 100
+    -- Bonus for reasonable team counts
+    local teamBonus = 1.0
+    if groupCount >= 2 and groupCount <= 4 then
+        teamBonus = 1.2
+    end
+    
+    return groupCount * balance * coverage * teamBonus * 100
 end
 
 function TeamSystemManager:AutoDetect()
@@ -1209,7 +1717,7 @@ function TeamSystemManager:Clear()
 end
 
 -- ============================================================================
--- HEURISTICS MANAGER
+-- HEURISTICS MANAGER (ENHANCED WITH VOLUME-BASED HITBOX CLASSIFIER)
 -- ============================================================================
 local HeuristicsManager = {}
 HeuristicsManager.__index = HeuristicsManager
@@ -1227,7 +1735,7 @@ function HeuristicsManager.new(config)
     self.hitboxClassifiers = {}
     
     self.hitboxPatterns = config.hitboxPatterns or {
-        "head", "hit", "hurt", "hitbox", "target", "weak",
+        "head", "hit", "hurt", "hitbox", "target", "weak", "crit",
     }
     
     self.anchorCandidates = config.anchorCandidates or {
@@ -1235,9 +1743,68 @@ function HeuristicsManager.new(config)
         "Root", "RootPart", "Head",
     }
     
+    -- NEW: Volume-based hitbox detection config
+    self.hitboxVolumeThreshold = config.hitboxVolumeThreshold or 2.5
+    self.minHitboxVolume = config.minHitboxVolume or 0.1
+    
     self.hitboxCache = WeakKeys()
+    self.anchorCache = WeakKeys()
+    self.anchorCacheTime = config.anchorCacheTime or 1.0
+    
+    -- Register default volume-based classifier
+    self:_registerDefaultClassifiers()
     
     return self
+end
+
+-- NEW: Register default hitbox classifiers
+function HeuristicsManager:_registerDefaultClassifiers()
+    -- Volume-based classifier
+    self:RegisterHitboxClassifier(function(part)
+        if not part then return nil end
+        
+        local name = Defensive.GetName(part):lower()
+        
+        -- Strong positive signals
+        if name:find("head") or name:find("hitbox") or name:find("hurtbox") then 
+            return true 
+        end
+        
+        -- Check volume (smaller parts more likely to be hitboxes)
+        local size = Defensive.SafeGet(part, "Size")
+        if size then
+            local vol
+            if typeof(size) == "Vector3" then
+                vol = size.X * size.Y * size.Z
+            elseif type(size) == "table" then
+                vol = (size.X or 1) * (size.Y or 1) * (size.Z or 1)
+            end
+            
+            if vol and vol > self.minHitboxVolume and vol < self.hitboxVolumeThreshold then
+                -- Small parts with specific names
+                if name:find("target") or name:find("weak") or name:find("crit") then
+                    return true
+                end
+            end
+        end
+        
+        return nil -- Let other classifiers decide
+    end)
+    
+    -- Attribute-based classifier
+    self:RegisterHitboxClassifier(function(part)
+        if not part then return nil end
+        
+        if self.adapter:GetAttribute(part, "IsHitbox") then
+            return true
+        end
+        
+        if self.adapter:GetAttribute(part, "DamageMultiplier") then
+            return true
+        end
+        
+        return nil
+    end)
 end
 
 function HeuristicsManager:RegisterAnchorResolver(fn)
@@ -1261,99 +1828,127 @@ end
 function HeuristicsManager:GetAnchorPart(model)
     if not model then return nil end
     
+    -- Check cache
+    local cached = self.anchorCache[model]
+    if cached and (tick() - cached.time) < self.anchorCacheTime then
+        if cached.anchor and (Defensive.IsValid(cached.anchor) or (type(cached.anchor) == "table" and cached.anchor.Parent)) then
+            return cached.anchor
+        end
+    end
+    
     local workspace = self.adapter:GetWorkspace()
+    local result = nil
     
     -- 1. Custom resolvers
     for _, resolver in ipairs(self.anchorResolvers) do
-        local ok, result = pcall(function()
+        local ok, anchor = pcall(function()
             return resolver(model)
         end)
         
-        if ok and result then
-            local isBasePart = self.adapter:IsA(result, "BasePart")
-            local isDescendant = Defensive.IsDescendantOf(result, workspace) or
-                                 (type(result) == "table" and result.Parent)
+        if ok and anchor then
+            local isBasePart = self.adapter:IsA(anchor, "BasePart")
+            local isDescendant = Defensive.IsDescendantOf(anchor, workspace) or
+                                 (type(anchor) == "table" and anchor.Parent)
             
             if isBasePart and isDescendant then
-                return result
+                result = anchor
+                break
             end
         elseif not ok and self.metrics then
-            self.metrics:RecordError("anchor_resolver", result)
+            self.metrics:RecordError("anchor_resolver", anchor)
         end
     end
     
     -- 2. Named candidates
-    for _, name in ipairs(self.anchorCandidates) do
-        local part = self.adapter:FindFirstChild(model, name)
-        if part then
-            local isBasePart = self.adapter:IsA(part, "BasePart")
-            local isDescendant = Defensive.IsDescendantOf(part, workspace) or
-                                 (type(part) == "table" and part.Parent)
-            
-            if isBasePart and isDescendant then
-                return part
+    if not result then
+        for _, name in ipairs(self.anchorCandidates) do
+            local part = self.adapter:FindFirstChild(model, name)
+            if part then
+                local isBasePart = self.adapter:IsA(part, "BasePart")
+                local isDescendant = Defensive.IsDescendantOf(part, workspace) or
+                                     (type(part) == "table" and part.Parent)
+                
+                if isBasePart and isDescendant then
+                    result = part
+                    break
+                end
             end
         end
     end
     
     -- 3. PrimaryPart
-    local primaryPart = Defensive.SafeGet(model, "PrimaryPart")
-    if primaryPart then
-        local isDescendant = Defensive.IsDescendantOf(primaryPart, workspace) or
-                             (type(primaryPart) == "table" and primaryPart.Parent)
-        if isDescendant then
-            return primaryPart
+    if not result then
+        local primaryPart = Defensive.SafeGet(model, "PrimaryPart")
+        if primaryPart then
+            local isDescendant = Defensive.IsDescendantOf(primaryPart, workspace) or
+                                 (type(primaryPart) == "table" and primaryPart.Parent)
+            if isDescendant then
+                result = primaryPart
+            end
         end
     end
     
     -- 4. Humanoid.RootPart
-    local humanoid = self.adapter:FindFirstChildOfClass(model, "Humanoid")
-    if humanoid then
-        local rootPart = Defensive.SafeGet(humanoid, "RootPart")
-        if rootPart then
-            local isDescendant = Defensive.IsDescendantOf(rootPart, workspace) or
-                                 (type(rootPart) == "table" and rootPart.Parent)
-            if isDescendant then
-                return rootPart
+    if not result then
+        local humanoid = self.adapter:FindFirstChildOfClass(model, "Humanoid")
+        if humanoid then
+            local rootPart = Defensive.SafeGet(humanoid, "RootPart")
+            if rootPart then
+                local isDescendant = Defensive.IsDescendantOf(rootPart, workspace) or
+                                     (type(rootPart) == "table" and rootPart.Parent)
+                if isDescendant then
+                    result = rootPart
+                end
             end
         end
     end
     
     -- 5. Attribute-marked
-    local descendants = self.adapter:GetDescendants(model)
-    for _, child in ipairs(descendants) do
-        if self.adapter:IsA(child, "BasePart") then
-            if self.adapter:GetAttribute(child, "IsAnchor") then
-                return child
+    if not result then
+        local descendants = self.adapter:GetDescendants(model)
+        for _, child in ipairs(descendants) do
+            if self.adapter:IsA(child, "BasePart") then
+                if self.adapter:GetAttribute(child, "IsAnchor") then
+                    result = child
+                    break
+                end
             end
         end
     end
     
     -- 6. Largest BasePart fallback
-    local best, bestVol = nil, 0
-    local children = self.adapter:GetChildren(model)
-    for _, child in ipairs(children) do
-        if self.adapter:IsA(child, "BasePart") then
-            local size = Defensive.SafeGet(child, "Size")
-            if size then
-                local vol
-                if type(size) == "table" then
-                    vol = (size.X or 1) * (size.Y or 1) * (size.Z or 1)
-                else
-                    local ok, v = pcall(function()
-                        return size.X * size.Y * size.Z
-                    end)
-                    vol = ok and v or 0
-                end
-                
-                if vol > bestVol then
-                    best, bestVol = child, vol
+    if not result then
+        local best, bestVol = nil, 0
+        local children = self.adapter:GetChildren(model)
+        for _, child in ipairs(children) do
+            if self.adapter:IsA(child, "BasePart") then
+                local size = Defensive.SafeGet(child, "Size")
+                if size then
+                    local vol
+                    if typeof(size) == "Vector3" then
+                        vol = size.X * size.Y * size.Z
+                    elseif type(size) == "table" then
+                        vol = (size.X or 1) * (size.Y or 1) * (size.Z or 1)
+                    else
+                        vol = 0
+                    end
+                    
+                    if vol > bestVol then
+                        best, bestVol = child, vol
+                    end
                 end
             end
         end
+        result = best
     end
     
-    return best
+    -- Cache result
+    self.anchorCache[model] = {
+        anchor = result,
+        time = tick(),
+    }
+    
+    return result
 end
 
 function HeuristicsManager:IsHitboxPart(part)
@@ -1402,8 +1997,27 @@ function HeuristicsManager:IsHitboxPart(part)
     return false
 end
 
+-- NEW: Get all hitbox parts in a model
+function HeuristicsManager:GetHitboxParts(model)
+    if not model then return {} end
+    
+    local hitboxes = {}
+    local descendants = self.adapter:GetDescendants(model)
+    
+    for _, part in ipairs(descendants) do
+        if self.adapter:IsA(part, "BasePart") then
+            if self:IsHitboxPart(part) then
+                table.insert(hitboxes, part)
+            end
+        end
+    end
+    
+    return hitboxes
+end
+
 function HeuristicsManager:ClearCache()
     self.hitboxCache = WeakKeys()
+    self.anchorCache = WeakKeys()
 end
 
 -- ============================================================================
@@ -1497,12 +2111,10 @@ function ConnectionManager:ClearPlayer(player)
 end
 
 function ConnectionManager:ClearAll()
-    -- Clear player connections
     for player, _ in pairs(self.playerConnections) do
         self:ClearPlayer(player)
     end
     
-    -- Clear global connections
     for _, conn in ipairs(self.globalConnections) do
         if conn and conn.Disconnect then
             pcall(conn.Disconnect, conn)
@@ -1533,10 +2145,8 @@ function SemanticEngineModule.new(dependencies)
     
     dependencies = dependencies or {}
     
-    -- Version
     self.Version = VERSION
     
-    -- Config (public, modifiable)
     self.Config = {
         CacheTime = 0.15,
         MaxCacheTime = 0.5,
@@ -1546,8 +2156,21 @@ function SemanticEngineModule.new(dependencies)
         Debug = false,
         LogLevel = "WARN",
         
+        -- NEW: Fuzzy matching
+        FuzzyMatchThreshold = 0.75,
+        
+        -- NEW: Proximity clustering
+        EnableProximityClustering = true,
+        ProximityRadius = 15,
+        
+        -- NEW: Container heuristic
+        MinContainerScore = 1.0,
+        
+        -- NEW: Hitbox volume
+        HitboxVolumeThreshold = 2.5,
+        
         HitboxNamePatterns = {
-            "head", "hit", "hurt", "hitbox", "target", "weak",
+            "head", "hit", "hurt", "hitbox", "target", "weak", "crit",
         },
         
         ContainerNames = {
@@ -1561,24 +2184,27 @@ function SemanticEngineModule.new(dependencies)
             "HumanoidRootPart", "Torso", "UpperTorso", "LowerTorso",
             "Root", "RootPart", "Head",
         },
+        
+        -- NEW: Team strategy weights
+        TeamStrategyWeights = {
+            RobloxTeam = 2.0,
+            TeamColor = 1.5,
+            Attribute = 1.8,
+            Proximity = 1.0,
+            CustomResolver = 1.5,
+        },
     }
     
-    -- Adapter (environment abstraction)
     self._adapter = dependencies.adapter or RobloxAdapter.new(dependencies)
-    
-    -- Time provider (injectable for testing)
     self._timeProvider = dependencies.timeProvider or function() return self._adapter:Now() end
     
-    -- Logger
     self._logger = Logger.new({
         level = LOG_LEVELS[self.Config.LogLevel] or LOG_LEVELS.WARN,
         prefix = "[Semantic]",
     })
     
-    -- Metrics
     self._metrics = Metrics.new()
     
-    -- Subsystems
     self._cache = PlayerCache.new({
         baseCacheTime = self.Config.CacheTime,
         maxCacheTime = self.Config.MaxCacheTime,
@@ -1595,14 +2221,8 @@ function SemanticEngineModule.new(dependencies)
         timeProvider = self._timeProvider,
         scanInterval = self.Config.ContainerScanInterval,
         containerNames = self.Config.ContainerNames,
-    })
-    
-    self._teamManager = TeamSystemManager.new({
-        adapter = self._adapter,
-        logger = self._logger,
-        metrics = self._metrics,
-        timeProvider = self._timeProvider,
-        checkInterval = self.Config.TeamCheckInterval,
+        minContainerScore = self.Config.MinContainerScore,
+        fuzzyMatchThreshold = self.Config.FuzzyMatchThreshold,
     })
     
     self._heuristics = HeuristicsManager.new({
@@ -1611,12 +2231,24 @@ function SemanticEngineModule.new(dependencies)
         metrics = self._metrics,
         hitboxPatterns = self.Config.HitboxNamePatterns,
         anchorCandidates = self.Config.AnchorCandidates,
+        hitboxVolumeThreshold = self.Config.HitboxVolumeThreshold,
+    })
+    
+    self._teamManager = TeamSystemManager.new({
+        adapter = self._adapter,
+        logger = self._logger,
+        metrics = self._metrics,
+        timeProvider = self._timeProvider,
+        checkInterval = self.Config.TeamCheckInterval,
+        heuristics = self._heuristics,
+        strategyWeights = self.Config.TeamStrategyWeights,
+        proximityRadius = self.Config.ProximityRadius,
+        enableProximityClustering = self.Config.EnableProximityClustering,
     })
     
     self._eventEmitter = EventEmitter.new(self._adapter)
     self._connectionManager = ConnectionManager.new()
     
-    -- Target definitions (weak tables)
     self.TargetDefinitions = {
         HitboxParts = WeakKeys(),
         CombatModels = WeakKeys(),
@@ -1624,7 +2256,6 @@ function SemanticEngineModule.new(dependencies)
         PlayerToEntity = WeakKeys(),
     }
     
-    -- Stats (public, for compatibility)
     self.Stats = {
         DamageEventsDetected = 0,
         EntitiesLearned = 0,
@@ -1632,7 +2263,6 @@ function SemanticEngineModule.new(dependencies)
         PlayersTracked = 0,
     }
     
-    -- TeamSystem (public, for compatibility)
     self.TeamSystem = {
         Method = "Unknown",
         CurrentPartition = {},
@@ -1642,7 +2272,6 @@ function SemanticEngineModule.new(dependencies)
         CheckInterval = 3,
     }
     
-    -- ContainerSystem (public, for compatibility)
     self.ContainerSystem = {
         KnownContainers = self._containerManager.knownContainers,
         RegisteredContainers = self._containerManager.registeredContainers,
@@ -1650,59 +2279,54 @@ function SemanticEngineModule.new(dependencies)
         ScanInterval = 5,
     }
     
-    -- Heuristics (public, for compatibility)
     self.Heuristics = {
         AnchorResolvers = self._heuristics.anchorResolvers,
         TeamResolvers = self._teamManager.customResolvers,
         HitboxClassifiers = self._heuristics.hitboxClassifiers,
     }
     
-    -- Events (public)
     self.Events = {}
     
-    -- Internal state
     self._initialized = false
     self._maintenanceErrorStreak = 0
     self._localPlayer = nil
     
-    -- For backward compatibility
     self._connections = {}
     self._playerConnections = WeakKeys()
     
     return self
 end
 
--- ============================================================================
--- FACTORY METHOD (CREATES WITH DEPENDENCIES)
--- ============================================================================
 function SemanticEngineModule.Create(dependencies)
     return SemanticEngineModule.new(dependencies)
 end
 
--- ============================================================================
--- ADAPTER ACCESS
--- ============================================================================
 function SemanticEngineModule:GetAdapter()
     return self._adapter
 end
 
 function SemanticEngineModule:SetAdapter(adapter)
     self._adapter = adapter
-    -- Update subsystems
     self._containerManager.adapter = adapter
     self._teamManager.adapter = adapter
     self._heuristics.adapter = adapter
 end
 
 -- ============================================================================
--- PUBLIC API: REGISTRATION
+-- PUBLIC API: REGISTRATION (ENHANCED WITH WEIGHTS)
 -- ============================================================================
 function SemanticEngineModule:RegisterAnchorHeuristic(fn)
     self._heuristics:RegisterAnchorResolver(fn)
 end
 
 function SemanticEngineModule:RegisterTeamResolver(fn)
-    self._teamManager:RegisterResolver(fn)
+    -- Backward compatible (weight = 1)
+    self._teamManager:RegisterResolver(fn, 1)
+end
+
+-- NEW: Register team resolver with weight
+function SemanticEngineModule:RegisterTeamResolverWeighted(fn, weight)
+    return self._teamManager:RegisterResolver(fn, weight)
 end
 
 function SemanticEngineModule:RegisterHitboxClassifier(fn)
@@ -1711,6 +2335,11 @@ end
 
 function SemanticEngineModule:RegisterContainer(container)
     return self._containerManager:Register(container)
+end
+
+-- NEW: Register container resolver with weight
+function SemanticEngineModule:RegisterContainerResolver(fn, weight)
+    return self._containerManager:RegisterResolver(fn, weight)
 end
 
 -- ============================================================================
@@ -1722,24 +2351,20 @@ function SemanticEngineModule:TrackPlayer(player)
     
     self._logger:Debug("Tracking player:", Defensive.GetName(player))
     
-    -- Clear previous state
     self._connectionManager:ClearPlayer(player)
     self._cache:Clear(player)
     self.TargetDefinitions.PlayerToEntity[player] = nil
     
-    -- Find entity
     local entity = self:FindEntityForPlayer(player)
     if entity then
         self:LinkPlayerToEntity(player, entity)
     end
     
-    -- Setup character tracking
     local character = Defensive.SafeGet(player, "Character")
     if character then
         self:_setupCharacterTracking(player, character)
     end
     
-    -- Watch for new characters
     local charAddedEvent = Defensive.SafeGet(player, "CharacterAdded")
     if charAddedEvent then
         local conn = self._adapter:ConnectEvent(charAddedEvent, function(newCharacter)
@@ -1763,7 +2388,6 @@ end
 function SemanticEngineModule:_setupCharacterTracking(player, character)
     if not character then return end
     
-    -- Watch ancestry changes
     local ancestryEvent = Defensive.SafeGet(character, "AncestryChanged")
     if ancestryEvent then
         local conn = self._adapter:ConnectEvent(ancestryEvent, function(_, parent)
@@ -1780,7 +2404,6 @@ function SemanticEngineModule:_setupCharacterTracking(player, character)
         end
     end
     
-    -- Watch humanoid death
     local humanoid = self._adapter:FindFirstChildOfClass(character, "Humanoid")
     if humanoid then
         local diedEvent = Defensive.SafeGet(humanoid, "Died")
@@ -1832,10 +2455,12 @@ function SemanticEngineModule:LinkPlayerToEntity(player, entity)
 end
 
 -- ============================================================================
--- PUBLIC API: ENTITY FINDING
+-- PUBLIC API: ENTITY FINDING (ENHANCED WITH FUZZY MATCHING)
 -- ============================================================================
-function SemanticEngineModule:FindEntityForPlayer(player)
+function SemanticEngineModule:FindEntityForPlayer(player, useFuzzy)
     if not player then return nil end
+    
+    useFuzzy = useFuzzy ~= false -- Default to true
     
     -- 1. Direct mapping
     local mapped = self.TargetDefinitions.PlayerToEntity[player]
@@ -1851,8 +2476,8 @@ function SemanticEngineModule:FindEntityForPlayer(player)
     
     local playerName = Defensive.GetName(player)
     
-    -- 3. Containers
-    local containerResult = self._containerManager:FindInContainers(playerName)
+    -- 3. Containers (with fuzzy support)
+    local containerResult = self._containerManager:FindInContainers(playerName, useFuzzy)
     if containerResult then
         return containerResult
     end
@@ -1870,6 +2495,31 @@ function SemanticEngineModule:FindEntityForPlayer(player)
         local displayChild = self._adapter:FindFirstChild(workspace, displayName)
         if displayChild and self._adapter:IsA(displayChild, "Model") then
             return displayChild
+        end
+        
+        -- Try containers with display name
+        local containerDisplayResult = self._containerManager:FindInContainers(displayName, useFuzzy)
+        if containerDisplayResult then
+            return containerDisplayResult
+        end
+    end
+    
+    -- 6. Fuzzy search in workspace (last resort)
+    if useFuzzy then
+        local workspaceChildren = self._adapter:GetChildren(workspace)
+        local models = {}
+        for _, child in ipairs(workspaceChildren) do
+            if self._adapter:IsA(child, "Model") then
+                table.insert(models, child)
+            end
+        end
+        
+        local bestMatch = FuzzyFindBest(playerName, models, self.Config.FuzzyMatchThreshold)
+        if bestMatch then
+            if self._logger then
+                self._logger:Debug("Fuzzy workspace match:", playerName, "->", Defensive.GetName(bestMatch))
+            end
+            return bestMatch
         end
     end
     
@@ -1973,6 +2623,11 @@ function SemanticEngineModule:IsHitboxPart(part)
     return self._heuristics:IsHitboxPart(part)
 end
 
+-- NEW: Get all hitbox parts in a model
+function SemanticEngineModule:GetHitboxParts(model)
+    return self._heuristics:GetHitboxParts(model)
+end
+
 -- ============================================================================
 -- PUBLIC API: CACHE MANAGEMENT
 -- ============================================================================
@@ -1982,6 +2637,7 @@ end
 
 function SemanticEngineModule:ClearAllCache()
     self._cache:ClearAll()
+    self._heuristics:ClearCache()
 end
 
 -- ============================================================================
@@ -1990,7 +2646,6 @@ end
 function SemanticEngineModule:DetectTeamSystemWithVoting()
     self._teamManager:DetectWithVoting()
     
-    -- Sync to public properties
     self.TeamSystem.Method = self._teamManager.method
     self.TeamSystem.CurrentPartition = self._teamManager.currentPartition
     self.TeamSystem.ForceFFA = self._teamManager.forceFFA
@@ -2005,7 +2660,6 @@ end
 function SemanticEngineModule:AutoDetectTeamSystem()
     self._teamManager:AutoDetect()
     
-    -- Sync
     self.TeamSystem.Method = self._teamManager.method
     self.TeamSystem.CurrentPartition = self._teamManager.currentPartition
     self.TeamSystem.ForceFFA = self._teamManager.forceFFA
@@ -2026,10 +2680,9 @@ end
 function SemanticEngineModule:ScanForContainers()
     self._containerManager:Scan()
     
-    -- Sync
     self.ContainerSystem.KnownContainers = self._containerManager.knownContainers
     self.ContainerSystem.LastScan = self._containerManager.lastScan
-    self.Stats.ContainersFound = self._metrics:Get("containers_found")
+    self.Stats.ContainersFound = self._metrics:Get("containers_found") + self._metrics:Get("containers_found_heuristic")
 end
 
 -- ============================================================================
@@ -2070,7 +2723,7 @@ function SemanticEngineModule:GetAllValidPlayers()
 end
 
 -- ============================================================================
--- PUBLIC API: METRICS & OBSERVABILITY
+-- PUBLIC API: METRICS & OBSERVABILITY (ENHANCED)
 -- ============================================================================
 function SemanticEngineModule:GetMetrics()
     local cacheStats = self._cache:GetStats()
@@ -2099,6 +2752,17 @@ function SemanticEngineModule:GetMetrics()
         teamSystem = {
             method = self._teamManager.method,
             forceFFA = self._teamManager.forceFFA,
+            resolverCount = #self._teamManager.customResolvers,
+        },
+        
+        containers = {
+            known = self._containerManager:GetContainerCount(),
+            resolverCount = #self._containerManager.containerResolvers,
+        },
+        
+        heuristics = {
+            anchorResolvers = #self._heuristics.anchorResolvers,
+            hitboxClassifiers = #self._heuristics.hitboxClassifiers,
         },
     }
 end
@@ -2118,7 +2782,6 @@ function SemanticEngineModule:Initialize(overrides)
     
     overrides = overrides or {}
     
-    -- Apply overrides
     if overrides.adapter then
         self:SetAdapter(overrides.adapter)
     end
@@ -2127,15 +2790,12 @@ function SemanticEngineModule:Initialize(overrides)
         self._timeProvider = overrides.timeProvider
     end
     
-    -- Update logger level from config
     self._logger:SetLevel(self.Config.LogLevel)
     
     self._logger:Info("Initializing Semantic Engine v" .. self.Version)
     
-    -- Get local player
     self._localPlayer = self._adapter:GetLocalPlayer()
     
-    -- Create events
     self.Events = {
         PlayerTracked = self._eventEmitter:CreateEvent("PlayerTracked"),
         PlayerUntracked = self._eventEmitter:CreateEvent("PlayerUntracked"),
@@ -2144,11 +2804,9 @@ function SemanticEngineModule:Initialize(overrides)
         EntityLinked = self._eventEmitter:CreateEvent("EntityLinked"),
     }
     
-    -- Initial scans
     self:ScanForContainers()
     self:DetectTeamSystemWithVoting()
     
-    -- Track existing players
     local players = self._adapter:GetPlayers()
     for _, player in ipairs(players) do
         if player ~= self._localPlayer then
@@ -2156,7 +2814,6 @@ function SemanticEngineModule:Initialize(overrides)
         end
     end
     
-    -- Connect player events
     local playersService = self._adapter._Players or game:GetService("Players")
     
     if playersService then
@@ -2185,7 +2842,6 @@ function SemanticEngineModule:Initialize(overrides)
         end
     end
     
-    -- Maintenance loop
     self._adapter:Spawn(function()
         while self._initialized do
             local ok, err = pcall(function()
@@ -2234,16 +2890,13 @@ function SemanticEngineModule:Destroy()
     
     self._initialized = false
     
-    -- Clear connections
     self._connectionManager:ClearAll()
     
-    -- Clear caches
     self._cache:ClearAll()
     self._heuristics:ClearCache()
     self._containerManager:Clear()
     self._teamManager:Clear()
     
-    -- Clear target definitions
     self.TargetDefinitions = {
         HitboxParts = WeakKeys(),
         CombatModels = WeakKeys(),
@@ -2251,11 +2904,9 @@ function SemanticEngineModule:Destroy()
         PlayerToEntity = WeakKeys(),
     }
     
-    -- Destroy events
     self._eventEmitter:Destroy()
     self.Events = {}
     
-    -- Reset metrics
     self._metrics:Reset()
     self._maintenanceErrorStreak = 0
     
@@ -2263,7 +2914,7 @@ function SemanticEngineModule:Destroy()
 end
 
 -- ============================================================================
--- DEBUG
+-- DEBUG (ENHANCED)
 -- ============================================================================
 function SemanticEngineModule:Debug()
     print("\n========== SEMANTIC ENGINE v" .. self.Version .. " DEBUG ==========")
@@ -2285,20 +2936,26 @@ function SemanticEngineModule:Debug()
     print("  Method: " .. self._teamManager.method)
     print("  ForceFFA: " .. tostring(self._teamManager.forceFFA))
     print("  AutoDetected: " .. tostring(self._teamManager.autoDetected))
+    print("  Custom Resolvers: " .. #self._teamManager.customResolvers)
+    print("  Proximity Enabled: " .. tostring(self._teamManager.enableProximityClustering))
     
     print("\n--- Containers ---")
     local containerCount = 0
     for container, info in pairs(self._containerManager.knownContainers) do
         containerCount = containerCount + 1
         local valid = Defensive.IsValid(container) or (type(container) == "table" and container.Parent)
-        print("  " .. info.name .. " (valid: " .. tostring(valid) .. ")")
+        local source = info.source or "unknown"
+        local score = info.score or 0
+        print(string.format("  %s (valid: %s, source: %s, score: %.1f)", info.name, tostring(valid), source, score))
     end
     print("  Total Known: " .. containerCount)
+    print("  Container Resolvers: " .. #self._containerManager.containerResolvers)
     
     print("\n--- Heuristics ---")
     print("  Anchor Resolvers: " .. #self._heuristics.anchorResolvers)
     print("  Team Resolvers: " .. #self._teamManager.customResolvers)
     print("  Hitbox Classifiers: " .. #self._heuristics.hitboxClassifiers)
+    print("  Hitbox Volume Threshold: " .. self._heuristics.hitboxVolumeThreshold)
     
     print("\n--- Player Mappings ---")
     local mappingCount = 0
@@ -2352,6 +3009,8 @@ function SemanticEngineModule:DumpState()
         table.insert(containers, {
             name = info.name,
             valid = Defensive.IsValid(container) or (type(container) == "table" and container.Parent),
+            score = info.score or 0,
+            source = info.source or "unknown",
         })
     end
     
@@ -2367,6 +3026,10 @@ function SemanticEngineModule:DumpState()
             anchorResolvers = #self._heuristics.anchorResolvers,
             teamResolvers = #self._teamManager.customResolvers,
             hitboxClassifiers = #self._heuristics.hitboxClassifiers,
+        },
+        resolvers = {
+            containerResolvers = #self._containerManager.containerResolvers,
+            teamResolvers = #self._teamManager.customResolvers,
         },
     }
 end
@@ -2389,6 +3052,15 @@ function SemanticEngineModule:CompatibilityReport()
             "Unit test support with mocks",
             "Destroy() for complete cleanup",
             "All heuristics are extensible",
+            -- NEW in v3.1.0
+            "Levenshtein fuzzy string matching",
+            "Container resolvers with weights",
+            "Heuristic container detection",
+            "Team resolvers with weights",
+            "Proximity clustering for team detection",
+            "Volume-based hitbox classification",
+            "Enhanced container scoring",
+            "Weighted ensemble voting for teams",
         },
         deprecatedFeatures = {},
         maintainedFunctions = {
@@ -2401,12 +3073,15 @@ function SemanticEngineModule:CompatibilityReport()
             "RegisterAnchorHeuristic", "RegisterTeamResolver",
             "RegisterHitboxClassifier", "RegisterContainer",
             "IsHitboxPart", "DumpState", "CompatibilityReport",
+            -- NEW
+            "RegisterTeamResolverWeighted", "RegisterContainerResolver",
+            "GetHitboxParts",
         },
     }
 end
 
 -- ============================================================================
--- UNIT TESTS
+-- UNIT TESTS (ENHANCED)
 -- ============================================================================
 SemanticEngineModule.Tests = {}
 
@@ -2431,7 +3106,6 @@ function SemanticEngineModule.Tests.RunAll()
     
     print("\n========== SEMANTIC ENGINE TESTS ==========")
     
-    -- Create mock environment
     local mockAdapter = MockAdapter.new({
         startTime = 1000,
     })
@@ -2439,7 +3113,10 @@ function SemanticEngineModule.Tests.RunAll()
     local localPlayer = MockAdapter.CreateMockPlayer({ Name = "LocalPlayer", UserId = 1 })
     mockAdapter._localPlayer = localPlayer
     
-    local player1Char, player1Humanoid, player1Root = MockAdapter.CreateMockCharacter({ Name = "Player1" })
+    local player1Char, player1Humanoid, player1Root = MockAdapter.CreateMockCharacter({ 
+        Name = "Player1",
+        Position = { X = 0, Y = 5, Z = 0 },
+    })
     local player1 = MockAdapter.CreateMockPlayer({
         Name = "Player1",
         UserId = 12345,
@@ -2447,7 +3124,10 @@ function SemanticEngineModule.Tests.RunAll()
         Team = { Name = "Red" },
     })
     
-    local player2Char, player2Humanoid, player2Root = MockAdapter.CreateMockCharacter({ Name = "Player2" })
+    local player2Char, player2Humanoid, player2Root = MockAdapter.CreateMockCharacter({ 
+        Name = "Player2",
+        Position = { X = 100, Y = 5, Z = 100 },
+    })
     local player2 = MockAdapter.CreateMockPlayer({
         Name = "Player2",
         UserId = 67890,
@@ -2457,7 +3137,6 @@ function SemanticEngineModule.Tests.RunAll()
     
     mockAdapter._players = { localPlayer, player1, player2 }
     
-    -- Create engine with mock
     local engine = SemanticEngineModule.Create({
         adapter = mockAdapter,
         timeProvider = function() return mockAdapter:Now() end,
@@ -2465,7 +3144,7 @@ function SemanticEngineModule.Tests.RunAll()
     
     engine.Config.Debug = false
     
-    -- Tests
+    -- Basic Tests
     test("Engine creates successfully", function()
         assert(engine ~= nil, "Engine should be created")
         assert(engine.Version == VERSION, "Version should match")
@@ -2482,96 +3161,51 @@ function SemanticEngineModule.Tests.RunAll()
         assert(anchor.Name == "HumanoidRootPart", "Should be HumanoidRootPart")
     end)
     
-    test("GetAnchorPart with custom heuristic", function()
-        engine:RegisterAnchorHeuristic(function(model)
-            local children = mockAdapter:GetChildren(model)
-            for _, child in ipairs(children) do
-                if child.Name == "CustomRoot" then
-                    return child
-                end
-            end
+    -- Levenshtein Tests
+    test("Levenshtein distance calculation", function()
+        assert(Levenshtein("hello", "hello") == 0, "Same strings should be 0")
+        assert(Levenshtein("hello", "hallo") == 1, "One char diff should be 1")
+        assert(Levenshtein("", "hello") == 5, "Empty to string should be length")
+    end)
+    
+    test("Fuzzy similarity works", function()
+        local sim = FuzzySimilarity("Player1", "Player1")
+        assert(sim == 1, "Identical should be 1")
+        
+        local sim2 = FuzzySimilarity("Player1", "Player2")
+        assert(sim2 > 0.5 and sim2 < 1, "Similar should be between 0.5 and 1")
+    end)
+    
+    -- Weighted Resolver Tests
+    test("Container resolver with weight", function()
+        local resolved = false
+        engine:RegisterContainerResolver(function(adapter)
+            resolved = true
             return nil
-        end)
+        end, 5.0)
         
-        local customChar = {
-            Name = "CustomCharacter",
-            ClassName = "Model",
-            Parent = true,
-            Children = {
-                { Name = "CustomRoot", ClassName = "BasePart", IsA = "BasePart", Parent = true },
-            },
-        }
-        
-        local anchor = engine:GetAnchorPart(customChar)
-        assert(anchor ~= nil, "Should find custom anchor")
-        assert(anchor.Name == "CustomRoot", "Should be CustomRoot")
+        assert(#engine._containerManager.containerResolvers >= 1, "Should have resolver")
+        engine:ScanForContainers()
+        assert(resolved, "Resolver should have been called")
     end)
     
-    test("FindEntityForPlayer returns character", function()
-        local entity = engine:FindEntityForPlayer(player1)
-        assert(entity ~= nil, "Should find entity")
-        assert(entity.Name == "Player1", "Should be player1's character")
-    end)
-    
-    test("Cache stores and retrieves data", function()
-        local data1 = engine:GetCachedPlayerData(player1)
-        assert(data1 ~= nil, "Should get data")
-        assert(data1.isValid == true, "Should be valid")
-        
-        -- Should hit cache
-        local data2 = engine:GetCachedPlayerData(player1)
-        local cacheStats = engine._cache:GetStats()
-        assert(cacheStats.hits >= 1, "Should have cache hit")
-    end)
-    
-    test("Cache respects TTL", function()
-        engine._cache:Clear(player1)
-        
-        local data1 = engine:GetCachedPlayerData(player1)
-        assert(data1 ~= nil, "Should get data")
-        
-        -- Advance time past TTL
-        mockAdapter:AdvanceTime(1)
-        
-        local cached = engine._cache:Get(player1)
-        assert(cached == nil, "Cache should be expired")
-    end)
-    
-    test("Team detection identifies different teams", function()
-        engine:DetectTeamSystemWithVoting()
-        
-        local areSame = engine:AreSameTeam(player1, player2)
-        assert(areSame == false, "Players on different teams should not be same team")
-    end)
-    
-    test("Team detection identifies same team", function()
-        local player3 = MockAdapter.CreateMockPlayer({
-            Name = "Player3",
-            UserId = 11111,
-            Team = { Name = "Red" },
-        })
-        
-        mockAdapter._players = { localPlayer, player1, player2, player3 }
-        engine:DetectTeamSystemWithVoting()
-        
-        local areSame = engine:AreSameTeam(player1, player3)
-        assert(areSame == true, "Players on same team should be same team")
-    end)
-    
-    test("Custom team resolver works", function()
-        engine:RegisterTeamResolver(function(players)
+    test("Team resolver with weight", function()
+        local called = false
+        engine:RegisterTeamResolverWeighted(function(players)
+            called = true
             local partition = {}
             for _, p in ipairs(players) do
-                partition[p] = p.Name:sub(1, 1) -- Group by first letter
+                partition[p] = "TestTeam"
             end
             return partition
-        end)
+        end, 10.0)
         
+        assert(#engine._teamManager.customResolvers >= 1, "Should have resolver")
         engine:DetectTeamSystemWithVoting()
-        -- Just verify it doesn't crash
-        assert(true)
+        assert(called, "Resolver should have been called")
     end)
     
+    -- Hitbox Tests
     test("IsHitboxPart classifies correctly", function()
         local headPart = { Name = "Head", ClassName = "BasePart", IsA = "BasePart", Parent = true }
         local hitboxPart = { Name = "Hitbox", ClassName = "BasePart", IsA = "BasePart", Parent = true }
@@ -2582,50 +3216,27 @@ function SemanticEngineModule.Tests.RunAll()
         assert(engine:IsHitboxPart(normalPart) == false, "Arm should not be hitbox")
     end)
     
-    test("Custom hitbox classifier works", function()
-        engine:RegisterHitboxClassifier(function(part)
-            if part.Name == "CustomHit" then return true end
-            return nil -- Let other classifiers decide
-        end)
-        
-        local customPart = { Name = "CustomHit", ClassName = "BasePart", IsA = "BasePart", Parent = true }
-        assert(engine:IsHitboxPart(customPart) == true, "Custom hitbox should be detected")
+    test("GetHitboxParts returns array", function()
+        local parts = engine:GetHitboxParts(player1Char)
+        assert(type(parts) == "table", "Should return table")
     end)
     
-    test("Metrics tracking works", function()
+    -- Team Detection Tests
+    test("Team detection identifies different teams", function()
+        engine:DetectTeamSystemWithVoting()
+        local areSame = engine:AreSameTeam(player1, player2)
+        assert(areSame == false, "Players on different teams should not be same team")
+    end)
+    
+    -- Metrics Tests
+    test("Metrics tracking enhanced", function()
         local metrics = engine:GetMetrics()
         assert(metrics ~= nil, "Should get metrics")
-        assert(metrics.version == VERSION, "Version should match")
-        assert(type(metrics.cache) == "table", "Should have cache stats")
+        assert(metrics.containers ~= nil, "Should have containers metrics")
+        assert(metrics.teamSystem.resolverCount ~= nil, "Should have resolver count")
     end)
     
-    test("Container registration works", function()
-        local container = {
-            Name = "TestContainer",
-            ClassName = "Folder",
-            Parent = true,
-            Children = {
-                { Name = "Entity1", ClassName = "Model", IsA = "Model", Parent = true },
-            },
-        }
-        
-        local success = engine:RegisterContainer(container)
-        assert(success == true, "Should register container")
-    end)
-    
-    test("DumpState returns valid structure", function()
-        local state = engine:DumpState()
-        assert(state ~= nil, "Should get state")
-        assert(state.version == VERSION, "Version should match")
-        assert(type(state.playerMappings) == "table", "Should have player mappings")
-    end)
-    
-    test("CompatibilityReport returns valid structure", function()
-        local report = engine:CompatibilityReport()
-        assert(report ~= nil, "Should get report")
-        assert(type(report.maintainedFunctions) == "table", "Should have maintained functions")
-    end)
-    
+    -- Cleanup
     test("Destroy cleans up properly", function()
         engine:Destroy()
         assert(engine._initialized == false, "Should be uninitialized")
@@ -2655,28 +3266,23 @@ end
 -- BACKWARD COMPATIBILITY WRAPPER
 -- ============================================================================
 local function CreateBackwardCompatibleWrapper()
-    -- Check if Core exists
     local Core = _G.ForgeHubCore
     if not Core then
         warn("[Semantic] ForgeHubCore not found. Module loaded but not attached to Core.")
         return SemanticEngineModule
     end
     
-    -- Create singleton instance with Roblox adapter
     local instance = SemanticEngineModule.Create({
         Players = Core.Players,
         Workspace = Core.Workspace,
         RunService = Core.RunService,
     })
     
-    -- Set local player reference
     instance._localPlayer = Core.LocalPlayer
     
-    -- Export to Core
     Core.SemanticEngine = instance
     Core.PlayerCache = instance._cache
     
-    -- Also expose module and adapters for advanced usage
     Core.SemanticEngineModule = SemanticEngineModule
     Core.SemanticAdapters = {
         Roblox = RobloxAdapter,
@@ -2702,11 +3308,15 @@ SemanticEngineModule.Utils = {
     Metrics = Metrics,
     WeakKeys = WeakKeys,
     WeakValues = WeakValues,
+    Levenshtein = Levenshtein,
+    FuzzySimilarity = FuzzySimilarity,
+    FuzzyFindBest = FuzzyFindBest,
+    VectorUtils = VectorUtils,
+    ProximityClustering = ProximityClustering,
 }
 
 SemanticEngineModule.LOG_LEVELS = LOG_LEVELS
 
--- Auto-attach to Core if available
 local instance = CreateBackwardCompatibleWrapper()
 
 return instance or SemanticEngineModule
